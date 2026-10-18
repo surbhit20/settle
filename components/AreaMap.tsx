@@ -3,54 +3,61 @@
 // so it cannot render on the server like the rest of the page.
 
 import { useEffect, useRef, useState } from "react";
-import type { Map as MapLibreMap, MapGeoJSONFeature } from "maplibre-gl";
+import type { Map as MapLibreMap, MapGeoJSONFeature, Marker } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import AreaCard from "@/components/AreaCard";
 import { NO_DATA_COLOR, rentFillExpression, rentLegend } from "@/lib/rentScale";
+import { FILTERED_COLOR, scoreFillExpression, scoreLegend } from "@/lib/scoreScale";
 
 // Free vector basemap, no API key (decisions.md D013).
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 const BAY_AREA_CENTER: [number, number] = [-122.15, 37.6]; // [lng, lat]
-
-const CENSUS_ZCTA_URL = "https://www.census.gov/programs-surveys/geography/guidance/geo-areas/zctas.html";
 const ZILLOW_URL = "https://www.zillow.com/research/data/";
+const CENSUS_ZCTA_URL = "https://www.census.gov/programs-surveys/geography/guidance/geo-areas/zctas.html";
 
-// Quick summary shown while hovering (the full card loads only on click).
-type HoveredArea = { zcta: string; name: string | null; rent: number | null };
+// typeof import("maplibre-gl") = "the type of the whole maplibre-gl module", so we can keep the
+// dynamically imported module in a ref and create Markers later.
+type MapLibreModule = typeof import("maplibre-gl");
 
-function toHovered(feature: MapGeoJSONFeature): HoveredArea {
-  const p = feature.properties;
-  return {
-    zcta: String(p.zcta),
-    name: p.name ?? null,
-    // MapLibre turns JSON null into undefined or the string "null"; normalize to null.
-    rent: typeof p.rent_usd === "number" ? p.rent_usd : null,
-  };
-}
+type Hovered = { zcta: string; name: string | null; rent: number | null };
 
-export default function AreaMap() {
-  // useRef holds values that survive re-renders without causing one:
-  // the <div> MapLibre draws into, and the map object itself.
+type Props = {
+  // zcta -> personal score for ranked areas. null = no search yet (show rent instead).
+  scores: Record<string, number> | null;
+  selectedZcta: string | null;
+  onSelect: (zcta: string) => void;
+  office: { lat: number; lng: number } | null;
+};
+
+export default function AreaMap({ scores, selectedZcta, onSelect, office }: Props) {
+  // useRef holds values that survive re-renders without causing one.
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const libRef = useRef<MapLibreModule | null>(null);
+  const zctasRef = useRef<string[]>([]); // every area id, for setting/clearing feature-state
+  const markerRef = useRef<Marker | null>(null);
+  // Map event handlers are attached once, but onSelect can change; reading it through a ref
+  // means the handler always calls the latest one.
+  const onSelectRef = useRef(onSelect);
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
 
-  // useState values DO trigger a re-render when they change, so the panel updates.
-  const [hovered, setHovered] = useState<HoveredArea | null>(null);
-  const [selectedZcta, setSelectedZcta] = useState<string | null>(null);
+  // useState values DO trigger a re-render. `ready` flips once the areas layer exists, which
+  // re-runs the effects below that depend on it.
+  const [ready, setReady] = useState(false);
+  const [hovered, setHovered] = useState<Hovered | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // useEffect with [] runs once after the component first appears in the browser.
-  // The function it returns runs when the component goes away (cleanup).
+  // 1. Create the map once.
   useEffect(() => {
     let cancelled = false;
     let hoveredId: string | number | undefined;
 
     async function init() {
-      // Import MapLibre only in the browser (it touches `window`).
-      const maplibregl = await import("maplibre-gl");
+      const maplibregl = await import("maplibre-gl"); // browser-only import (it touches `window`)
       if (cancelled || !containerRef.current) return;
-      // Worker file is copied into public/ by scripts/copy-maplibre-worker.mjs (D014).
-      maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
+      libRef.current = maplibregl;
+      maplibregl.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs"); // D014
 
       const map = new maplibregl.Map({
         container: containerRef.current,
@@ -61,8 +68,7 @@ export default function AreaMap() {
       mapRef.current = map;
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
-      // "style.load" fires once the basemap style is parsed. We avoid "load", which also waits for
-      // every basemap source; OpenFreeMap's low-zoom raster never finishes at our zoom (D014).
+      // "style.load", not "load": see D014.
       map.once("style.load", async () => {
         const res = await fetch("/api/areas");
         if (!res.ok) {
@@ -71,19 +77,17 @@ export default function AreaMap() {
         }
         const areas = await res.json();
         if (cancelled) return;
+        zctasRef.current = areas.features.map((f: { id: string }) => f.id);
 
-        // promoteId makes each feature's `zcta` its id, so we can set hover/selected state by id.
         map.addSource("areas", { type: "geojson", data: areas, promoteId: "zcta" });
         map.addLayer({
           id: "areas-fill",
           type: "fill",
           source: "areas",
           paint: {
-            // Color by rent band; grey where Zillow has no rent index (lib/rentScale.ts).
-            // The cast is needed because our expression is built as a plain array.
+            // Starts as the rent map; switched to the score map when scores arrive (effect 2).
             "fill-color": rentFillExpression() as unknown as string,
-            // Expressions are MapLibre's mini-language: more opaque while hovered.
-            "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.85, 0.6],
+            "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.9, 0.65],
           },
         });
         map.addLayer({
@@ -97,29 +101,29 @@ export default function AreaMap() {
         });
 
         map.on("mousemove", "areas-fill", (e) => {
-          const feature = e.features?.[0];
-          if (!feature) return;
-          if (hoveredId !== undefined) {
-            map.setFeatureState({ source: "areas", id: hoveredId }, { hover: false });
-          }
-          hoveredId = feature.id;
+          const f: MapGeoJSONFeature | undefined = e.features?.[0];
+          if (!f) return;
+          if (hoveredId !== undefined) map.setFeatureState({ source: "areas", id: hoveredId }, { hover: false });
+          hoveredId = f.id;
           map.setFeatureState({ source: "areas", id: hoveredId }, { hover: true });
           map.getCanvas().style.cursor = "pointer";
-          setHovered(toHovered(feature));
+          setHovered({
+            zcta: String(f.properties.zcta),
+            name: f.properties.name ?? null,
+            rent: typeof f.properties.rent_usd === "number" ? f.properties.rent_usd : null,
+          });
         });
         map.on("mouseleave", "areas-fill", () => {
-          if (hoveredId !== undefined) {
-            map.setFeatureState({ source: "areas", id: hoveredId }, { hover: false });
-          }
+          if (hoveredId !== undefined) map.setFeatureState({ source: "areas", id: hoveredId }, { hover: false });
           hoveredId = undefined;
           map.getCanvas().style.cursor = "";
           setHovered(null);
         });
-        // Click (or tap) opens the full card for that area.
         map.on("click", "areas-fill", (e) => {
-          const feature = e.features?.[0];
-          if (feature) setSelectedZcta(String(feature.properties.zcta));
+          const f = e.features?.[0];
+          if (f) onSelectRef.current(String(f.properties.zcta));
         });
+        setReady(true);
       });
     }
 
@@ -131,68 +135,96 @@ export default function AreaMap() {
     };
   }, []);
 
-  // Keep the map's "selected" outline in sync with React state. Runs whenever selectedZcta changes;
-  // the cleanup un-highlights the previous area first.
+  // 2. Recolor when scores change: write each area's score into feature-state, then point the
+  //    fill color at either the score scale or the rent scale.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !selectedZcta || !map.getSource("areas")) return;
+    if (!ready || !map) return;
+    for (const zcta of zctasRef.current) {
+      const score = scores?.[zcta];
+      if (typeof score === "number") map.setFeatureState({ source: "areas", id: zcta }, { score });
+      else map.removeFeatureState({ source: "areas", id: zcta }, "score");
+    }
+    const fill = scores ? scoreFillExpression() : rentFillExpression();
+    map.setPaintProperty("areas-fill", "fill-color", fill as unknown as string);
+  }, [ready, scores]);
+
+  // 3. Outline the selected area. The cleanup un-highlights the previous one first.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !selectedZcta) return;
     map.setFeatureState({ source: "areas", id: selectedZcta }, { selected: true });
     return () => {
-      if (map.getSource("areas")) {
-        map.setFeatureState({ source: "areas", id: selectedZcta }, { selected: false });
-      }
+      if (map.getSource("areas")) map.setFeatureState({ source: "areas", id: selectedZcta }, { selected: false });
     };
-  }, [selectedZcta]);
+  }, [ready, selectedZcta]);
+
+  // 4. Office marker.
+  useEffect(() => {
+    const map = mapRef.current;
+    const lib = libRef.current;
+    markerRef.current?.remove();
+    markerRef.current = null;
+    if (!ready || !map || !lib || !office) return;
+    markerRef.current = new lib.Marker({ color: "#18181b" }).setLngLat([office.lng, office.lat]).addTo(map);
+  }, [ready, office]);
+
+  const hoveredScore = hovered && scores ? scores[hovered.zcta] : undefined;
+  const legend = scores ? scoreLegend() : rentLegend();
 
   return (
-    <div className="relative flex-1">
+    <div className="relative h-full w-full">
       {/* h-full, not absolute positioning: MapLibre's CSS forces position: relative on this div. */}
       <div ref={containerRef} className="h-full w-full" />
 
-      <aside className="absolute left-4 top-4 max-h-[calc(100%-2rem)] w-80 max-w-[calc(100%-2rem)] overflow-y-auto rounded-lg bg-white/95 p-4 text-sm shadow-md dark:bg-zinc-900/95">
-        {error ? (
-          <p className="text-red-600">{error}</p>
-        ) : selectedZcta ? (
-          // key: a new ZIP means a new card (and a fresh fetch), not an update to the old one.
-          <AreaCard key={selectedZcta} zcta={selectedZcta} onClose={() => setSelectedZcta(null)} />
-        ) : hovered ? (
-          <div>
-            <h2 className="text-base font-semibold">
-              {hovered.name ?? "Unnamed area"} <span className="font-normal text-zinc-500">{hovered.zcta}</span>
-            </h2>
-            <p>
-              {hovered.rent === null ? "Rent: no data" : `Typical rent $${Math.round(hovered.rent).toLocaleString("en-US")}/mo`}
-            </p>
-            <p className="mt-1 text-xs text-zinc-500">Click for hidden risks and sources.</p>
-          </div>
-        ) : (
-          <p className="text-zinc-600 dark:text-zinc-400">Hover an area for its rent; click for details.</p>
-        )}
-        <p className="mt-3 border-t border-zinc-200 pt-2 text-xs text-zinc-500 dark:border-zinc-700">
-          Boundaries:{" "}
-          <a className="underline" href={CENSUS_ZCTA_URL} target="_blank" rel="noreferrer">
-            US Census 2020 ZCTAs
-          </a>
-        </p>
-      </aside>
+      {(hovered || error) && (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-white/95 px-3 py-2 text-sm shadow dark:bg-zinc-900/95">
+          {error ? (
+            <span className="text-red-600">{error}</span>
+          ) : hovered ? (
+            <>
+              <span className="font-semibold">{hovered.name ?? "Unnamed"}</span> <span className="text-zinc-500">{hovered.zcta}</span>
+              <div>
+                {scores
+                  ? hoveredScore === undefined
+                    ? "Filtered out"
+                    : `Your score ${hoveredScore.toFixed(0)}`
+                  : hovered.rent === null
+                    ? "Rent: no data"
+                    : `Typical rent $${Math.round(hovered.rent).toLocaleString("en-US")}/mo`}
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
 
-      <div className="absolute bottom-8 right-4 rounded-lg bg-white/95 p-3 text-xs shadow-md dark:bg-zinc-900/95">
-        <div className="mb-1 font-semibold">Typical monthly rent</div>
+      <div className="absolute bottom-8 right-3 rounded-lg bg-white/95 p-3 text-xs shadow-md dark:bg-zinc-900/95">
+        <div className="mb-1 font-semibold">{scores ? "Your score" : "Typical monthly rent"}</div>
         <ul>
-          {rentLegend().map((row) => (
+          {legend.map((row) => (
             <li key={row.label} className="flex items-center gap-2">
               <span className="inline-block h-3 w-4 rounded-sm" style={{ background: row.color }} />
               {row.label}
             </li>
           ))}
           <li className="flex items-center gap-2">
-            <span className="inline-block h-3 w-4 rounded-sm" style={{ background: NO_DATA_COLOR }} />
-            No data
+            <span className="inline-block h-3 w-4 rounded-sm" style={{ background: scores ? FILTERED_COLOR : NO_DATA_COLOR }} />
+            {scores ? "Filtered out" : "No data"}
           </li>
         </ul>
-        <a className="mt-1 block text-zinc-500 underline" href={ZILLOW_URL} target="_blank" rel="noreferrer">
-          Zillow Observed Rent Index
-        </a>
+        <div className="mt-1 text-zinc-500">
+          {scores ? (
+            "Click an area to see why"
+          ) : (
+            <a className="underline" href={ZILLOW_URL} target="_blank" rel="noreferrer">
+              Zillow Observed Rent Index
+            </a>
+          )}
+          {" · "}
+          <a className="underline" href={CENSUS_ZCTA_URL} target="_blank" rel="noreferrer">
+            Census ZCTAs
+          </a>
+        </div>
       </div>
     </div>
   );

@@ -204,3 +204,89 @@ Context: CLAUDE.md section 8 listed both `JEV_API_KEY` and `JEV_API_URL`. The ow
 Decision: Remove `JEV_API_URL` from `.env.example`, `.env.local` and CLAUDE.md section 8. When Jev is integrated (M4/M5), its endpoint becomes a named constant in the Jev client module, taken from TypeSafe AI's docs. Only the key stays in the environment, because only the key is secret. Also added `CENSUS_API_KEY` to the CLAUDE.md list (introduced in D015) so the brief matches `.env.example`.
 Alternatives considered: Keeping the variable for switching environments (e.g. a staging endpoint): no such need yet; easy to reintroduce.
 Consequences: The Jev endpoint, request/response format and confidence field are still unknown and must come from the owner before M4 (CLAUDE.md section 3).
+
+## D023: Redefine the earthquake and dam flags so they discriminate between areas
+Date: 2026.10.18
+Status: accepted (supersedes the seismic and dam parts of D019)
+Context: As defined in CLAUDE.md section 5, "seismic design category D or above" flagged 208 of 208 areas, and "high hazard dam within 10 km" flagged 197 of 208. A penalty applied to almost every area lowers all hidden-risk scores without changing the ranking, so it gives the user no information. Owner chose new definitions at the start of M3.
+Decision:
+- **Earthquake:** flag when `seismic_pga_2pct_50yr_g` ≥ **1.1 g** (peak ground acceleration with a 2% chance in 50 years, USGS 2023 NSHM). Flags **50** areas, roughly those nearest the Hayward and San Andreas faults. Design category is still shown on the card as context.
+- **Dam:** flag when the **nearest** dam (`nearest_dam_distance_m`) is **High** hazard-potential (`nearest_dam_hazard_potential`) and **closer than 2 km**. Flags **33** areas. Mireye `absent` (no NID dam within 10 km) counts as clear. The 10 km count is still shown on the card.
+- Constants in `lib/scoring/config.ts`: `seismicPgaFlagG: 1.1`, `highHazardDamMaxMeters: 2000`. Tests cover both boundaries.
+Alternatives considered: PGA ≥ 1.0 g (111 areas), ≥ 1.2 g (13); dam within 3 km (57), within 1 km (11); keeping the brief's rules.
+Consequences: Known limitation: the dam rule looks only at the nearest dam, so a High dam at 1.5 km behind a nearer Low dam at 1 km is missed. Mireye has no "nearest High dam distance" field; accept this for v1. Flag counts now: flood 14, wildfire 26, earthquake 50, dam 33, hazardous facility 12.
+
+## D024: OpenRouteService for commute times: free-tier limits and usage
+Date: 2026.10.18
+Status: accepted
+Context: CLAUDE.md section 4 asks to check and record ORS's current free-tier limits.
+Decision: Limits as published on 2026.10.18 (account.heigit.org/info/plans and openrouteservice.org/restrictions):
+- Standard (free) plan, **Matrix V2: 500 requests/day, 40/minute**. (Directions V2: 2,000/day, 40/min; Geocoding: 3,000/day, 100/min. Unused.)
+- **Matrix size: at most 3,500 origin × destination pairs per request** (25 with dynamic arguments).
+- We send one request per new office: `POST /v2/matrix/driving-car` with 209 locations (office + 208 centroids), `sources: [0]`, all others as destinations, `metrics: ["duration"]`. That's 1 × 208 = 208 pairs, well under 3,500.
+- Results cached in `commute_cache` keyed by office coordinate rounded to 3 decimals (~100 m). A repeat search from the same office costs no request.
+- ORS public routing returns **free-flow driving times (no live or rush-hour traffic)**. The UI labels commute as "drive time without traffic". We don't apply an invented traffic multiplier.
+Alternatives considered: Google Distance Matrix (traffic-aware but paid); transit via GTFS (v2 scope).
+Consequences: Peak-hour commutes in the Bay Area are often far longer than free-flow; users should set their max commute with that in mind. A traffic model or transit mode is a v2 candidate.
+
+## D025: Office geocoding via Mireye, cached by normalized input
+Date: 2026.10.18
+Status: accepted
+Context: CLAUDE.md section 4: geocode the office with Mireye `POST /v1/geocode` (1 credit) and reject centroid accuracy.
+Decision:
+- Mireye already refuses centroid-grade matches with `404 address_too_coarse` (verified: "1 Ferry Building, San Francisco" was refused; "1 Market St, San Francisco, CA 94105" returned `accuracy_type: rooftop`). We accept `rooftop` and `range_interpolation`, and reject anything else, including any `*centroid*` type, as a second guard.
+- Response fields used: `lat`, `lng`, `accuracy_type`, `normalized_address`, `source`. Samples cached in `data/raw/mireye/geocode/`.
+- Results (successes and "too coarse"/"not found" refusals) are cached in a new `geocode_cache` table keyed by the trimmed, lowercased address, so each distinct address costs at most one credit. Both test calls appear to have been billed (usage went from 2,914 to 2,916), so caching refusals matters too.
+- The geocoder is injected into the scoring route, and tests use a fake; tests never call Mireye.
+Alternatives considered: ORS geocoding (free 3,000/day, but the brief specifies Mireye and its refusal of centroid matches); browser geolocation (not an office address).
+Consequences: A user typo costs a credit once. With ~2,084 credits left this month there's ample headroom for development.
+
+## D026: Scoring formulas and edge-case rules
+Date: 2026.10.18
+Status: accepted
+Context: CLAUDE.md section 5 defines the shape of scoring; several details needed fixing. All numbers are in `lib/scoring/config.ts → SCORING`; logic is in `lib/scoring/score.ts` (pure, 30+ unit tests).
+Decision:
+- **Derived budget:** with no budget given, budget = **30%** of gross monthly income (salary / 12), the standard rent-to-income guideline.
+- **Hard filters**, in order: no driving route → `no_route`; commute > max → `commute_too_long`; rent > budget × **1.15** → `rent_over_budget`. Areas with **no rent data are kept** (we can't show they're over budget) and marked partial.
+- **Affordability:** piecewise linear on rent ÷ gross monthly income: ≤30% → 100, 40% → 75, ≥50% → 0. That's gentle from 30% to 40%, then steep, per the brief.
+- **Commute:** linear, 0 min → 100, the user's max → 0.
+- **Safety:** inverted mid-rank percentile of crime per 1,000 among all areas with data (filtered or not, so moving a filter doesn't change safety scores). Ties get equal percentiles.
+- **Hidden risks:** 100 minus penalties per flag: flood 25, wildfire 20, earthquake 15, dam 15, hazardous facility 20; floor 0. An unknown flag adds no penalty but marks the area partial.
+- **Final score:** weighted average of the sub-scores that have data, with slider weights renormalized over those. If every relevant slider is 0, equal weights.
+- **Partial data:** an area is partial when one of its sub-scores (or risk flags) is missing *for that area*. A sub-score with no data anywhere in the region (safety until M4) is returned once in `unavailableEverywhere` and shown as "not scored yet", instead of putting "partial data" on all 208 areas.
+- **Invalid input** (salary ≤ 0, max commute ≤ 0, budget ≤ 0) throws `ScoringInputError` → HTTP 400. Scoring never runs on a zero salary.
+- **Ties:** sort by score descending, then ZIP ascending, so the order is fully deterministic.
+Alternatives considered: Budget at 33% or 35% of gross (looser; 30% is the conventional threshold); a smooth affordability curve (harder to explain in one sentence); counting areas with no rent as over budget (treats missing data as a fact).
+Consequences: **Open issue for review:** areas with no rent data skip both the budget filter and the affordability sub-score. A short commute can then carry them to the top (e.g. downtown 94111 and 94104, population ~500, rank #1–2 for a $3,000 budget). They're labeled partial, but it reads poorly. To decide with the owner.
+
+## D027: "Which matters more?" pair cards set the priority sliders
+Date: 2026.10.18
+Status: accepted
+Context: Owner chose pair cards plus sliders over plain sliders (people tend to max every slider).
+Decision: Six cards, one per pair of the four priorities, each a concrete tradeoff ("Pay about $400 a month less in rent" vs "Drive about 20 minutes less each way"); wording lives in `lib/priorities.ts`. Slider value = 2 × (wins + 1), so the four values are proportional to 1–4 and fit the 0–10 range. "Skip" sets the Balanced preset (5 each). After the cards the sliders stay editable and "Redo the questions" restarts them. Safety cards are asked now so the weight is ready when crime data lands (M4).
+Alternatives considered: Bradley-Terry or other preference models (overkill for 6 answers); dropping safety cards until M4 (users would answer again later).
+Consequences: Card wording can bias answers. Kept magnitudes roughly comparable; revisit if one side wins almost always.
+
+## D028: Commute direction and caching
+Date: 2026.10.18
+Status: accepted (complements D024)
+Context: ORS matrix durations are directional.
+Decision: Areas are matrix **sources** and the office is the single **destination** (home → work, the morning commute). One call returns all 208 times. Seconds → minutes; `null` = no route (filtered as `no_route`). Cache rows in `commute_cache` are written in one `UNNEST` insert. A cache hit requires a row for every current area.
+Alternatives considered: Office → areas (evening direction; one-way streets and freeway ramps make it differ slightly).
+Consequences: First search for a new office takes ~2 s (geocode + matrix); repeats take ~60–140 ms. Moving sliders re-posts to `/api/score`, which hits both caches and spends nothing.
+
+## D029: M3 page layout and live rescoring
+Date: 2026.10.18
+Status: accepted
+Context: M3 adds a form, a heat map, a top 5 list and a score breakdown.
+Decision: `components/Explorer.tsx` owns page state. Left sidebar (full width on small screens, 384 px on desktop): form, pair cards or sliders, budget note, top 5. Clicking an area or list item replaces the sidebar with the area card, which now opens with the score breakdown (score, rank, partial label, each sub-score bar with weight, explanation and source links) or the filter reason. The map shows rent before the first search and the personal score after (`lib/scoreScale.ts`, green, filtered areas grey), plus an office marker. Slider changes rescore after a 300 ms debounce. Older responses are ignored if a newer request was sent.
+Alternatives considered: Scoring in the browser (would ship all metrics to every visitor and duplicate the server path the agent will use in M5).
+Consequences: The form stays mounted while a card is open, so typed values survive. Mobile polish is M6.
+
+## D030: Rank areas with verified rent before areas without rent
+Date: 2026.10.18
+Status: accepted (resolves the open issue in D026)
+Context: Areas with no Zillow rent skip both the budget filter and the affordability sub-score, so a short commute could carry them to the top. With a $3,000 budget from 1 Market St, downtown 94111 and 94104 (no rent data, ~500 residents) ranked #1 and #2, above areas proven to fit the budget.
+Decision: Owner chose to sort in two groups. First, every ranked area whose rent is known (affordability sub-score present); then every area without rent. Within each group: score descending, then ZIP ascending. Areas without rent keep their own score (missing data still isn't counted as zero, per CLAUDE.md section 5.3) and their "partial data" label. The breakdown says they're "ranked after every area with known rent, since we can't confirm it fits your budget". Implemented in `lib/scoring/score.ts` step 4; two new tests.
+Alternatives considered: Keep pure score order (brief's literal rule; misleading top results); fall back to ACS rent (declined earlier: lags and understates newcomer rent); hide areas without rent (removes places someone might want).
+Consequences: Rank no longer strictly follows score: a no-rent area can show a higher number than areas above it. Verified with the same search: the top 5 are now all known-rent areas, and the first no-rent area (94111, score 95.8) is at #50, right after the 49 areas with rent.

@@ -79,39 +79,46 @@ export function evaluateRisks(metrics: MetricMap): RiskFlag[] {
     sources: present(fire),
   });
 
-  // 3. Earthquake
-  const sdc = metrics.seismic_design_category;
+  // 3. Earthquake: flagged on expected shaking (PGA), not design category (D023).
   const pga = metrics.seismic_pga_2pct_50yr_g;
-  const category = ok(sdc) ? sdc.value_text : null;
+  const sdc = metrics.seismic_design_category;
+  const pgaG = ok(pga) ? pga.value : null;
   flags.push({
     key: "seismic",
     label: "Earthquake",
-    flagged:
-      category === null
-        ? null
-        : (t.seismicFlagCategories as readonly string[]).includes(category),
+    flagged: pgaG === null ? null : pgaG >= t.seismicPgaFlagG,
     detail:
-      category === null
+      pgaG === null
         ? "No data"
-        : `Seismic design category ${category}` +
-          (ok(pga) && pga.value !== null ? `; peak ground acceleration ${pga.value.toFixed(2)} g (2% in 50 yrs)` : ""),
-    sources: present(sdc, pga),
+        : `Peak ground acceleration ${pgaG.toFixed(2)} g (2% chance in 50 yrs)` +
+          (ok(sdc) && sdc.value_text ? `; design category ${sdc.value_text}` : ""),
+    sources: present(pga, sdc),
   });
 
-  // 4. High hazard dam nearby
-  const dams = metrics.high_hazard_dams_within_10km;
-  const nearestDam = metrics.nearest_dam_distance_m;
-  const damCount = ok(dams) ? dams.value : null;
+  // 4. High hazard dam: the nearest dam is High hazard-potential and close (D023).
+  //    Mireye "absent" for the nearest dam means no NID dam within 10 km: clear.
+  const nearestDist = metrics.nearest_dam_distance_m;
+  const nearestHazard = metrics.nearest_dam_hazard_potential;
+  const dams10 = metrics.high_hazard_dams_within_10km;
+  let damFlag: boolean | null = null;
+  let damDetail = "No data";
+  if (ok(nearestDist) && nearestDist.value !== null && ok(nearestHazard)) {
+    const hazard = nearestHazard.value_text ?? "Unknown";
+    damFlag = hazard === "High" && nearestDist.value < t.highHazardDamMaxMeters;
+    damDetail = `Nearest dam ${km(nearestDist.value)} away, ${hazard.toLowerCase()} hazard potential`;
+  } else if (nearestDist?.status === "absent") {
+    damFlag = false;
+    damDetail = "No inventoried dam within 10 km";
+  }
+  if (damFlag !== null && ok(dams10) && dams10.value !== null) {
+    damDetail += `; ${dams10.value} high hazard-potential within 10 km`;
+  }
   flags.push({
     key: "dam",
     label: "High hazard dam",
-    flagged: damCount === null ? null : damCount >= t.highHazardDamMinCount,
-    detail:
-      damCount === null
-        ? "No data"
-        : `${damCount} high hazard-potential dam${damCount === 1 ? "" : "s"} within 10 km` +
-          (ok(nearestDam) && nearestDam.value !== null ? `; nearest dam ${km(nearestDam.value)}` : ""),
-    sources: present(dams, nearestDam),
+    flagged: damFlag,
+    detail: damDetail,
+    sources: present(nearestDist, nearestHazard, dams10),
   });
 
   // 5. Hazardous chemical facility nearby. Mireye's "absent" here means "none within 10 km",

@@ -27,8 +27,9 @@ const clearArea: MetricMap = {
   wildfire_annual_frequency: m("wildfire_annual_frequency", 0.00001),
   seismic_design_category: m("seismic_design_category", null, { value_text: "C", status: "ok" }),
   seismic_pga_2pct_50yr_g: m("seismic_pga_2pct_50yr_g", 0.4),
-  high_hazard_dams_within_10km: m("high_hazard_dams_within_10km", 0),
+  high_hazard_dams_within_10km: m("high_hazard_dams_within_10km", 3),
   nearest_dam_distance_m: m("nearest_dam_distance_m", 8000),
+  nearest_dam_hazard_potential: m("nearest_dam_hazard_potential", null, { value_text: "High", status: "ok" }),
   nearest_hazardous_facility_distance_m: m("nearest_hazardous_facility_distance_m", 5000),
   nearest_hazardous_facility_name: m("nearest_hazardous_facility_name", null, { value_text: "Acme Plant", status: "ok" }),
 };
@@ -45,8 +46,8 @@ describe("evaluateRisks", () => {
       ...clearArea,
       within_floodplain_polygon: m("within_floodplain_polygon", 1),
       wildfire_annual_frequency: m("wildfire_annual_frequency", 0.003), // exactly the threshold
-      seismic_design_category: m("seismic_design_category", null, { value_text: "D", status: "ok" }),
-      high_hazard_dams_within_10km: m("high_hazard_dams_within_10km", 1),
+      seismic_pga_2pct_50yr_g: m("seismic_pga_2pct_50yr_g", 1.1), // exactly the threshold
+      nearest_dam_distance_m: m("nearest_dam_distance_m", 1999),
       nearest_hazardous_facility_distance_m: m("nearest_hazardous_facility_distance_m", 999),
     };
     expect(evaluateRisks(risky).every((f) => f.flagged === true)).toBe(true);
@@ -77,7 +78,44 @@ describe("evaluateRisks", () => {
 
   it("links the sources each flag was decided from", () => {
     const f = flag(clearArea, "seismic");
-    expect(f.sources.map((s) => s.metric_name)).toEqual(["seismic_design_category", "seismic_pga_2pct_50yr_g"]);
+    expect(f.sources.map((s) => s.metric_name)).toEqual(["seismic_pga_2pct_50yr_g", "seismic_design_category"]);
+  });
+
+  it("does not flag earthquake on design category alone (D023)", () => {
+    const f = flag(
+      { ...clearArea, seismic_design_category: m("x", null, { value_text: "E", status: "ok" }) },
+      "seismic",
+    );
+    expect(f.flagged).toBe(false);
+  });
+
+  it("flags a dam only when the NEAREST dam is High hazard and under 2 km (D023)", () => {
+    const near = (dist: number, hazard: string) =>
+      flag(
+        {
+          ...clearArea,
+          nearest_dam_distance_m: m("nearest_dam_distance_m", dist),
+          nearest_dam_hazard_potential: m("nearest_dam_hazard_potential", null, { value_text: hazard, status: "ok" }),
+        },
+        "dam",
+      );
+    expect(near(1500, "High").flagged).toBe(true);
+    expect(near(2000, "High").flagged).toBe(false); // boundary: strictly closer than 2 km
+    expect(near(500, "Low").flagged).toBe(false);
+    expect(near(500, "Significant").flagged).toBe(false);
+  });
+
+  it("treats 'no dam within 10 km' (absent) as clear", () => {
+    const f = flag(
+      {
+        ...clearArea,
+        nearest_dam_distance_m: m("nearest_dam_distance_m", null, { status: "absent" }),
+        nearest_dam_hazard_potential: m("nearest_dam_hazard_potential", null, { status: "absent" }),
+      },
+      "dam",
+    );
+    expect(f.flagged).toBe(false);
+    expect(f.detail).toMatch(/No inventoried dam within 10 km/);
   });
 });
 

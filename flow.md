@@ -2,14 +2,14 @@
 
 How the code actually executes, end to end. Must match the current code (see CLAUDE.md section 1.2).
 
-**Current state: M2 (rent choropleth and hidden-risks card).** Sections marked *(planned)* describe structure that does not exist in code yet.
+**Current state: M3 (personal scoring, heat map, top 5).** Sections marked *(planned)* describe structure that does not exist in code yet.
 
 ---
 
 ## 1. Local setup
 
 1. `docker compose up -d`: starts `settle-db` (Postgres 17 + PostGIS 3.5, amd64 image emulated on Apple Silicon) on `localhost:5433`.
-   On first start with an empty volume, it runs `db/init/*.sql` in name order: `001_schema.sql` enables PostGIS and creates `areas`, `area_metrics`, `crime_aggregates`, `commute_cache` and `agent_logs`; `002_area_metrics_text_confidence.sql` makes `area_metrics.confidence` text and adds `notes` and `dataset_vintage`.
+   On first start with an empty volume, it runs `db/init/*.sql` in name order: `001_schema.sql` enables PostGIS and creates `areas`, `area_metrics`, `crime_aggregates`, `commute_cache` and `agent_logs`; `002_area_metrics_text_confidence.sql` makes `area_metrics.confidence` text and adds `notes` and `dataset_vintage`; `003_geocode_cache.sql` creates `geocode_cache`.
 2. `cp .env.example .env.local`, then fill in keys. The app and the pipeline both read `.env.local`.
 3. `npm install`. Its `postinstall` step runs `scripts/copy-maplibre-worker.mjs`, which copies MapLibre's worker into `public/maplibre/`.
 4. `uv sync --project pipeline`: Python environment for the pipeline.
@@ -60,26 +60,32 @@ Shared helpers:
 
 ## 3. Request flow
 
-1. Browser `GET /` → `app/layout.tsx` + `app/page.tsx` (server-rendered header) → renders `<AreaMap />`.
-2. `components/AreaMap.tsx` (client component, runs in the browser):
-   1. `useEffect` dynamically imports `maplibre-gl`, calls `setWorkerUrl("/maplibre/maplibre-gl-worker.mjs")`, and creates the map with the OpenFreeMap Positron basemap (D013).
-   2. On `style.load` (not `load`, see D014): `fetch("/api/areas")`.
-   3. Adds GeoJSON source `areas` (`promoteId: "zcta"`), plus layers `areas-fill` (color = `lib/rentScale.ts → rentFillExpression()`, grey for null rent; opacity rises on hover) and `areas-outline` (thick dark line when feature-state `selected`).
-   4. `mousemove` → `setHovered()` → the panel shows name, ZIP and rent. `click` → `setSelectedZcta()` → the panel renders `<AreaCard key={zcta}>`, and a second `useEffect` sets the `selected` feature-state.
-   5. The legend (bottom right) is built from `rentLegend()`, the same scale as the map.
-3. `components/AreaCard.tsx` (on click): `fetch("/api/areas/<zcta>")` → renders Housing (rent, 3-yr change, home value, population), Hidden risks (five flags: flagged / clear / no data, "N of 208 areas flagged", source links) and More about the area (landslide, fiber, heat days, airport, major road). Every value has a `<SourceLink>`; missing values show "No data".
-4. `GET /api/areas` → `app/api/areas/route.ts`
-   1. `await connection()`: always per-request (D007).
-   2. `lib/areas.ts → getAreasGeoJSON()` → `getPool().query(AREAS_SQL)`: `areas` LEFT JOIN `area_metrics` (`rent_zori_usd`, status ok) → `zcta, name, county, population, rent_usd, ST_AsGeoJSON(ST_SimplifyPreserveTopology(geometry, 0.0003), 5)` (D012).
-   3. `toFeatureCollection(rows)` → JSON 200, or `{ error }` with 503 if the DB fails.
-5. `GET /api/areas/[zcta]` → `app/api/areas/[zcta]/route.ts`
-   1. `await connection()`; validate 5 digits (else 400).
-   2. `lib/areaDetails.ts → getAreaDetails()`: `SELECT … FROM areas WHERE zcta = $1` (else 404), then all `area_metrics` rows → `groupMetrics()`.
-   3. `lib/risks.ts → evaluateRisks(this area)` (thresholds from `lib/scoring/config.ts`) and `flagPrevalence(all areas)` (D019, D021).
-   4. → JSON `{ zcta, name, county, population, metrics, risks, prevalence }`.
-6. `GET /api/health` → `app/api/health/route.ts` → `SELECT PostGIS_Version()` → `{ ok, postgis }` (200) or `{ ok: false, error }` (503).
+### 3a. Page load
+1. Browser `GET /` → `app/layout.tsx` + `app/page.tsx` (server-rendered header) → `<Explorer />`.
+2. `components/Explorer.tsx` (client) renders the sidebar (`<SearchForm>`) and `<AreaMap scores={null}>`.
+3. `components/AreaMap.tsx` dynamically imports `maplibre-gl`, calls `setWorkerUrl()` (D014), creates the OpenFreeMap map (D013), and on `style.load` fetches `GET /api/areas` → adds the `areas` source (`promoteId: "zcta"`), `areas-fill` (rent colors from `lib/rentScale.ts`) and `areas-outline`, then sets `ready`.
+4. `GET /api/areas` → `app/api/areas/route.ts` → `lib/areas.ts → getAreasGeoJSON()`: `areas` LEFT JOIN `area_metrics` (`rent_zori_usd`) → simplified GeoJSON with `rent_usd` per feature (D012).
 
-*(planned, M3)* Form submit → `app/api/score/route.ts` → geocode office (Mireye) → commute matrix (ORS, `commute_cache`) → `lib/scoring/score.ts` → JSON scores → map recolors.
+### 3b. Submitting the form (the main M3 path)
+1. `components/PriorityPicker.tsx`: six pair cards (`lib/priorities.ts → PAIR_CARDS`) → `prioritiesFromChoices()` sets the sliders, or "Skip" sets `SCORING.defaultPriorities` (D027).
+2. `SearchForm` submit → `Explorer.runScore(req)` → `POST /api/score` with `{ salaryUsd, officeAddress, maxCommuteMin, rentBudgetUsd | null, priorities }`.
+3. `app/api/score/route.ts`:
+   1. `await connection()`; `lib/scoring/request.ts → parseScoreRequest()` validates the body (else 400).
+   2. `lib/geocode.ts → geocodeOffice()`: `SELECT … FROM geocode_cache WHERE address_key = $1`; on a miss, `mireyeGeocoder` → **Mireye `POST /v1/geocode` (1 credit)** → `parseGeocodeResponse()` (accepts `rooftop` / `range_interpolation`; maps `address_too_coarse` / `address_not_found`) → `INSERT INTO geocode_cache`. A refusal → 422 with a message for the form (D025).
+   3. `lib/commute.ts → getCommutes(office)`: `SELECT zcta, centroid FROM areas`; `SELECT … FROM commute_cache WHERE office_key = $1` (office rounded to 3 decimals). On a miss, `orsMatrixClient` → **ORS `POST /v2/matrix/driving-car`** (208 area sources → 1 office destination, `buildMatrixRequest()` / `parseMatrixResponse()`) → one `UNNEST` insert into `commute_cache` (D024, D028).
+   4. `lib/scoring/loadInputs.ts → loadAreaInputs()`: `areas` (+ latest `crime_aggregates.rate_per_1000`, empty until M4) and all `area_metrics` → `groupMetrics()` → `evaluateRisks()` → `AreaInputs[]`.
+   5. `lib/scoring/score.ts → scoreAreas(areas, user)` (pure, D026): validate → derive budget → hard filters → sub-scores (`affordabilitySubScore`, `commuteSubScore`, `safetySubScore`, `risksSubScore`) → `normalizeWeights()` over available sub-scores → weighted average → sort: areas with verified rent first, then score, then ZIP (D030).
+   6. → JSON `{ office, commuteFromCache, timingMs, monthlyIncomeUsd, budgetUsd, budgetDerived, ranked[], filtered[], unavailableEverywhere }`. Errors: 400 bad input, 422 bad address, 502 upstream failure.
+4. Back in `Explorer`: `setResult()` → `scores` (zcta → score) via `useMemo` → `<AreaMap scores>` writes each score into feature-state and switches `areas-fill` to `lib/scoreScale.ts → scoreFillExpression()`; office marker added; `<TopList>` shows the top 5.
+5. Moving a slider after a result → `Explorer.handlePrioritiesChange()` → 300 ms debounce → `runScore()` with the same inputs (both caches hit; ~60–140 ms) → map recolors. Responses to superseded requests are ignored.
+
+### 3c. Selecting an area
+1. Map click or top-5 click → `Explorer.setSelectedZcta()` → `AreaMap` sets the `selected` feature-state (thick outline).
+2. Sidebar shows `<AreaCard key={zcta} scoreSection={<ScoreBreakdown …/>}>`. `ScoreBreakdown` (from the scoring result, no extra request) shows score, rank, partial label, each sub-score with weight, explanation and source links, or the filter reason.
+3. `AreaCard` fetches `GET /api/areas/[zcta]` → `app/api/areas/[zcta]/route.ts` → `lib/areaDetails.ts → getAreaDetails()` → housing, five hidden-risk flags with "N of 208 flagged", extras, all with `<SourceLink>` (D019, D021, D023).
+
+### 3d. Health
+`GET /api/health` → `app/api/health/route.ts` → `SELECT PostGIS_Version()` → `{ ok, postgis }` (200) or `{ ok: false, error }` (503).
 
 ## 4. Agent flow
 
@@ -90,22 +96,37 @@ Shared helpers:
 | Path | Owns |
 |---|---|
 | `app/layout.tsx` | Root HTML shell, fonts, page metadata |
-| `app/page.tsx` | Home page: header + map |
-| `components/AreaMap.tsx` | MapLibre map, rent choropleth, legend, hover summary, selection |
+| `app/page.tsx` | Home page: header + `<Explorer />` |
+| `components/Explorer.tsx` | Page state: request, result, selection; calls `/api/score`; live slider rescoring |
+| `components/SearchForm.tsx` | Salary, office, max commute, budget inputs + priorities |
+| `components/PriorityPicker.tsx` | Six "which matters more?" cards, then sliders |
+| `components/TopList.tsx` | Top 5 ranked areas |
+| `components/ScoreBreakdown.tsx` | Why an area scored what it did (or why it was filtered) |
+| `components/AreaMap.tsx` | MapLibre map: rent or score coloring, legend, hover, selection, office marker |
 | `components/AreaCard.tsx` | Detail card for one area: housing, hidden risks, extras, all with sources |
 | `components/SourceLink.tsx` | The small source link shown next to every value |
 | `app/api/areas/route.ts` | Areas GeoJSON endpoint (with rent) |
 | `app/api/areas/[zcta]/route.ts` | One area's metrics, risk flags, and regional prevalence |
+| `app/api/score/route.ts` | Geocode → commute → load inputs → score |
+| `lib/scoring/score.ts` | Deterministic scoring: filters, sub-scores, weights, ranking (pure) |
+| `lib/scoring/types.ts` | Scoring input/output types |
+| `lib/scoring/loadInputs.ts` | Builds `AreaInputs` from the database and commute times |
+| `lib/scoring/request.ts` | Validates the `/api/score` body; `ScoreRequest` / `ScoreResponse` types |
+| `lib/geocode.ts` | Mireye geocoding with `geocode_cache` |
+| `lib/commute.ts` | ORS matrix drive times with `commute_cache` |
+| `lib/priorities.ts` | Pair cards and their mapping to slider values |
+| `lib/scoreScale.ts` | Score colors, legend, MapLibre expression |
 | `lib/areaDetails.ts` | Loads one area plus all metrics; `groupMetrics()` |
 | `lib/risks.ts` | `evaluateRisks()` (five hidden-risk flags), `flagPrevalence()` |
 | `lib/rentScale.ts` | Rent colors, legend rows, MapLibre fill expression |
-| `lib/scoring/config.ts` | All thresholds: risk flags, rent bands (weights and penalties come in M3) |
+| `lib/scoring/config.ts` | Every scoring number: risk thresholds, rent bands, budget rule, affordability curve, penalties, default priorities |
 | `app/api/health/route.ts` | DB + PostGIS health check endpoint |
 | `lib/areas.ts` | Areas SQL query and row → GeoJSON conversion |
 | `lib/db.ts` | `DATABASE_URL` lookup and the shared Postgres pool |
 | `scripts/copy-maplibre-worker.mjs` | Copies the MapLibre worker into `public/maplibre/` (postinstall) |
 | `db/init/001_schema.sql` | Database schema, applied on first container start |
 | `db/init/002_area_metrics_text_confidence.sql` | `confidence` → text; adds `notes`, `dataset_vintage` |
+| `db/init/003_geocode_cache.sql` | `geocode_cache` table |
 | `docker-compose.yml` | Local Postgres + PostGIS container |
 | `pipeline/settle_pipeline/config.py` | Pipeline paths, env loading, county list |
 | `pipeline/settle_pipeline/db.py` | Pipeline DB connection |

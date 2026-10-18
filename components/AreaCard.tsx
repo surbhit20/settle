@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AreaDetails } from "@/lib/areaDetails";
 import type { Metric, RiskFlag } from "@/lib/risks";
 import SourceLink from "@/components/SourceLink";
@@ -69,7 +69,17 @@ function RiskRow({ risk, flagged, total }: { risk: RiskFlag; flagged: number; to
   );
 }
 
-export default function AreaCard({ zcta, onClose }: { zcta: string; onClose: () => void }) {
+// `scoreSection` (optional) is rendered above the data sections: the personal score breakdown
+// after a search. ReactNode = "anything React can render".
+export default function AreaCard({
+  zcta,
+  onClose,
+  scoreSection,
+}: {
+  zcta: string;
+  onClose: () => void;
+  scoreSection?: ReactNode;
+}) {
   const [details, setDetails] = useState<AreaDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -110,6 +120,8 @@ export default function AreaCard({ zcta, onClose }: { zcta: string; onClose: () 
           ×
         </button>
       </div>
+
+      {scoreSection && <div className="mt-3">{scoreSection}</div>}
 
       <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">Housing</h3>
       <dl>
