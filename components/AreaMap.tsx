@@ -24,11 +24,12 @@ type Props = {
   // zcta -> personal score for ranked areas. null = no search yet (show rent instead).
   scores: Record<string, number> | null;
   selectedZcta: string | null;
+  compared?: string[]; // areas outlined after a chat "compare"
   onSelect: (zcta: string) => void;
   office: { lat: number; lng: number } | null;
 };
 
-export default function AreaMap({ scores, selectedZcta, onSelect, office }: Props) {
+export default function AreaMap({ scores, selectedZcta, compared = [], onSelect, office }: Props) {
   // useRef holds values that survive re-renders without causing one.
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -95,8 +96,18 @@ export default function AreaMap({ scores, selectedZcta, onSelect, office }: Prop
           type: "line",
           source: "areas",
           paint: {
-            "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#18181b", "#ffffff"],
-            "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.5, 0.6],
+            "line-color": [
+              "case",
+              ["boolean", ["feature-state", "selected"], false], "#18181b",
+              ["boolean", ["feature-state", "compared"], false], "#2563eb",
+              "#ffffff",
+            ],
+            "line-width": [
+              "case",
+              ["boolean", ["feature-state", "selected"], false], 2.5,
+              ["boolean", ["feature-state", "compared"], false], 2.5,
+              0.6,
+            ],
           },
         });
 
@@ -158,6 +169,17 @@ export default function AreaMap({ scores, selectedZcta, onSelect, office }: Prop
       if (map.getSource("areas")) map.setFeatureState({ source: "areas", id: selectedZcta }, { selected: false });
     };
   }, [ready, selectedZcta]);
+
+  // 3b. Outline compared areas in blue (cleared when the comparison changes).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    for (const z of compared) map.setFeatureState({ source: "areas", id: z }, { compared: true });
+    return () => {
+      if (!map.getSource("areas")) return;
+      for (const z of compared) map.setFeatureState({ source: "areas", id: z }, { compared: false });
+    };
+  }, [ready, compared]);
 
   // 4. Office marker.
   useEffect(() => {

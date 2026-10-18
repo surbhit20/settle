@@ -3,9 +3,11 @@
 import { useMemo, useRef, useState } from "react";
 import AreaCard from "@/components/AreaCard";
 import AreaMap from "@/components/AreaMap";
+import ChatBox from "@/components/ChatBox";
 import ScoreBreakdown from "@/components/ScoreBreakdown";
 import SearchForm from "@/components/SearchForm";
 import TopList from "@/components/TopList";
+import type { ChatReply } from "@/lib/agent/types";
 import type { ScoreRequest, ScoreResponse } from "@/lib/scoring/request";
 import type { Priorities } from "@/lib/scoring/types";
 
@@ -19,6 +21,10 @@ export default function Explorer() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedZcta, setSelectedZcta] = useState<string | null>(null);
+  const [compared, setCompared] = useState<string[]>([]); // outlined on the map after a "compare"
+  // When the chat changes inputs, the form is refilled by remounting it with these values.
+  const [formSeed, setFormSeed] = useState<ScoreRequest | null>(null);
+  const [formVersion, setFormVersion] = useState(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0); // ignore responses to requests that have been superseded
 
@@ -55,6 +61,26 @@ export default function Explorer() {
     debounceRef.current = setTimeout(() => runScore({ ...lastRequest, priorities }), 300);
   }
 
+  // Apply the actions a chat reply carries. Both routes (Jev fast path, Claude) emit the same shapes.
+  function handleChatReply(reply: ChatReply) {
+    if (!lastRequest) return;
+    let next = lastRequest;
+    for (const action of reply.actions) {
+      if (action.type === "update_filter") next = { ...next, ...action.changes };
+      if (action.type === "set_priority") next = { ...next, priorities: action.priorities };
+      if (action.type === "select_area") setSelectedZcta(action.zcta);
+      if (action.type === "compare") {
+        setCompared(action.zctas);
+        setSelectedZcta(null);
+      }
+    }
+    if (next !== lastRequest) {
+      setFormSeed(next);
+      setFormVersion((v) => v + 1); // new key -> SearchForm remounts showing the new values
+      runScore(next);
+    }
+  }
+
   // useMemo recomputes only when `result` changes, not on every render.
   const scores = useMemo(
     () => (result ? Object.fromEntries(result.ranked.map((a) => [a.zcta, a.score])) : null),
@@ -88,6 +114,8 @@ export default function Explorer() {
         {/* The form stays mounted (just hidden) while a card is open, so typed values survive. */}
         <div className={selectedZcta ? "hidden" : "flex flex-col gap-4"}>
           <SearchForm
+            key={formVersion}
+            initial={formSeed}
             onSubmit={runScore}
             onPrioritiesChange={handlePrioritiesChange}
             loading={loading}
@@ -105,12 +133,19 @@ export default function Explorer() {
             </>
           )}
         </div>
+        {/* Outside the hidden block, so a reply stays visible when it opens an area card. */}
+        {result && lastRequest && (
+          <div className="mt-4">
+            <ChatBox request={lastRequest} onReply={handleChatReply} />
+          </div>
+        )}
       </aside>
 
       <div className="relative min-h-[60vh] flex-1">
         <AreaMap
           scores={scores}
           selectedZcta={selectedZcta}
+          compared={compared}
           onSelect={setSelectedZcta}
           office={result ? { lat: result.office.lat, lng: result.office.lng } : null}
         />

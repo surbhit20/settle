@@ -13,15 +13,18 @@ type Props = {
   loading: boolean;
   hasResult: boolean;
   unavailable: SubScoreKey[];
+  // Starting values, e.g. after the chat changed a filter. The parent remounts this form
+  // (with a new `key`) whenever they change, so they only need to be read once.
+  initial?: ScoreRequest | null;
 };
 
 // Inputs are kept as strings while typing (an empty box is "", not 0) and converted on submit.
-export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasResult, unavailable }: Props) {
-  const [salary, setSalary] = useState("");
-  const [office, setOffice] = useState("");
-  const [maxCommute, setMaxCommute] = useState("45");
-  const [budget, setBudget] = useState("");
-  const [priorities, setPriorities] = useState<Priorities>({ ...SCORING.defaultPriorities });
+export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasResult, unavailable, initial }: Props) {
+  const [salary, setSalary] = useState(initial ? initial.salaryUsd.toLocaleString("en-US") : "");
+  const [office, setOffice] = useState(initial?.officeAddress ?? "");
+  const [maxCommute, setMaxCommute] = useState(String(initial?.maxCommuteMin ?? 45));
+  const [budget, setBudget] = useState(initial?.rentBudgetUsd != null ? String(initial.rentBudgetUsd) : "");
+  const [priorities, setPriorities] = useState<Priorities>(initial?.priorities ?? { ...SCORING.defaultPriorities });
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault(); // stop the browser from reloading the page
@@ -65,7 +68,7 @@ export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasR
         Commute is drive time without traffic. Leave the budget empty to use 30% of your gross monthly pay.
       </p>
 
-      <PriorityPicker priorities={priorities} onChange={handlePriorities} unavailable={unavailable} />
+      <PriorityPicker priorities={priorities} onChange={handlePriorities} unavailable={unavailable} startWithSliders={!!initial} />
 
       <button
         type="submit"

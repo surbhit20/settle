@@ -255,3 +255,14 @@ describe("scoreAreas", () => {
     expect(a.subScores.commute.sources[0].name).toBe("OpenRouteService");
   });
 });
+
+describe("explanations match the rounded inputs", () => {
+  it("uses the same one-decimal value in text and inputs", () => {
+    const r = scoreAreas(
+      [area("a", { crimeRatePer1000: 59.55, rentUsd: 2999.25 }), area("b", { crimeRatePer1000: 10 })],
+      user,
+    ).ranked.find((x) => x.zcta === "a")!;
+    expect(r.subScores.safety.explanation).toContain(`${r.subScores.safety.inputs.crime_rate_per_1000}`);
+    expect(r.subScores.affordability.explanation).toContain(`${Number(r.subScores.affordability.inputs.rent_share_pct).toFixed(1)}%`);
+  });
+});

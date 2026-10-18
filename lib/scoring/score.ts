@@ -47,7 +47,7 @@ export function affordabilitySubScore(area: AreaInputs, monthlyIncomeUsd: number
   const share = area.rentUsd / monthlyIncomeUsd;
   return {
     score: round1(affordabilityFromShare(share)),
-    explanation: `Typical rent ${usd(area.rentUsd)}/mo is ${(share * 100).toFixed(1)}% of your gross monthly income of ${usd(monthlyIncomeUsd)}.`,
+    explanation: `Typical rent ${usd(area.rentUsd)}/mo is ${round1(share * 100).toFixed(1)}% of your gross monthly income of ${usd(monthlyIncomeUsd)}.`,
     inputs: {
       rent_usd: Math.round(area.rentUsd),
       monthly_income_usd: Math.round(monthlyIncomeUsd),
@@ -94,7 +94,7 @@ export function safetySubScore(area: AreaInputs, regionRates: number[]): SubScor
   const pct = midRankPercentile(rate, regionRates);
   return {
     score: round1(100 * (1 - pct)),
-    explanation: `${rate.toFixed(1)} violent and property incidents per 1,000 residents a year; safer than ${Math.round((1 - pct) * 100)}% of the ${regionRates.length} areas with data.`,
+    explanation: `${round1(rate).toFixed(1)} violent and property incidents per 1,000 residents a year; safer than ${Math.round((1 - pct) * 100)}% of the ${regionRates.length} areas with data.`,
     inputs: { crime_rate_per_1000: round1(rate), percentile: round1(pct * 100) },
     sources: area.crimeSource ? [area.crimeSource] : [],
   };

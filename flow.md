@@ -2,7 +2,7 @@
 
 How the code actually executes, end to end. Must match the current code (see CLAUDE.md section 1.2).
 
-**Current state: M4 (crime data, Jev + Claude classification, safety score).** Sections marked *(planned)* describe structure that does not exist in code yet.
+**Current state: M5 (chat agent: Jev router, deterministic fast path, Claude fallback, live map updates, agent logs).** Sections marked *(planned)* describe structure that does not exist in code yet.
 
 ---
 
@@ -101,9 +101,20 @@ Shared helpers:
 ### 3d. Health
 `GET /api/health` → `app/api/health/route.ts` → `SELECT PostGIS_Version()` → `{ ok, postgis }` (200) or `{ ok: false, error }` (503).
 
-## 4. Agent flow
+## 4. Agent flow (D036)
 
-*(planned, M5)* Chat message → Jev classify → if intent is in {`update_filter`, `set_priority`, `compare`} and confidence ≥ 0.7, apply the action and rescore with no LLM call; otherwise call Claude with tools and grounding context → structured action and/or explanation → log to `agent_logs`.
+1. `components/ChatBox.tsx` → `POST /api/chat { message, request }` (`request` = the user's current inputs).
+2. `app/api/chat/route.ts`: validate (1–500 chars, `parseScoreRequest`) → `lib/scoring/run.ts → runScoring(request)` (geocode + commute from cache, `loadAreaInputs`, `scoreAreas`) for grounding.
+3. `lib/agent/router.ts → routeMessage()`:
+   1. `lib/agent/jev.ts → jevClassifier`: `POST https://api.typesafe.ai/v1/systemone`, one `choice` question over `update_filter | set_priority | compare | explain | area_info | other` → `{intent, confidence}`.
+   2. If confidence ≥ 0.7 and the intent is a fast one, `lib/agent/parse.ts`:
+      - `update_filter` → `parseFilterChange()` → action `{type: "update_filter", changes}` + templated reply.
+      - `set_priority` → `parsePriorityChange()` → `{type: "set_priority", priorities}`.
+      - `compare` → `findAreas()` → `compareReply()` (best ZIP per place from the result) → `{type: "compare", zctas}`.
+      → route `jev`, no LLM call.
+   3. Otherwise (other intents, low confidence, parser miss, Jev error): `mentionedAreas()` → `lib/agent/context.ts → buildContext()` → `lib/agent/claude.ts → claudeResponder`: Claude Opus 5.5 with four strict tools; tool calls → `toolToAction()` → tool results → final answer; `grounding.ungroundedNumbers()` → at most one rewrite → route `llm`.
+4. `lib/agent/log.ts → logAgentMessage()`: `INSERT INTO agent_logs (message, intent, confidence, route, latency_ms)`.
+5. Response `{reply, actions, route, intent, confidence, latencyMs}` → `Explorer.handleChatReply()`: `update_filter`/`set_priority` → new request → `runScore()` (map recolors) and the form remounts with the new values; `select_area` → open card; `compare` → blue outlines via `AreaMap` feature-state `compared`.
 
 ## 5. Module map
 
@@ -111,7 +122,8 @@ Shared helpers:
 |---|---|
 | `app/layout.tsx` | Root HTML shell, fonts, page metadata |
 | `app/page.tsx` | Home page: header + `<Explorer />` |
-| `components/Explorer.tsx` | Page state: request, result, selection; calls `/api/score`; live slider rescoring |
+| `components/Explorer.tsx` | Page state: request, result, selection; calls `/api/score`; live slider rescoring; applies chat actions |
+| `components/ChatBox.tsx` | Chat UI: examples, messages with route and latency, sends `/api/chat` |
 | `components/SearchForm.tsx` | Salary, office, max commute, budget inputs + priorities |
 | `components/PriorityPicker.tsx` | Six "which matters more?" cards, then sliders |
 | `components/TopList.tsx` | Top 5 ranked areas |
@@ -121,7 +133,17 @@ Shared helpers:
 | `components/SourceLink.tsx` | The small source link shown next to every value |
 | `app/api/areas/route.ts` | Areas GeoJSON endpoint (with rent) |
 | `app/api/areas/[zcta]/route.ts` | One area's metrics, risk flags, and regional prevalence |
-| `app/api/score/route.ts` | Geocode → commute → load inputs → score |
+| `app/api/score/route.ts` | Validates and calls `runScoring` |
+| `app/api/chat/route.ts` | Chat endpoint: scoring for grounding → router → log |
+| `lib/scoring/run.ts` | Shared pipeline: geocode → commute → load inputs → score |
+| `lib/agent/router.ts` | Jev routing, fast-path replies, Claude fallback, `mentionedAreas` |
+| `lib/agent/parse.ts` | Deterministic parsers: filter changes, priority changes, area names/ZIPs |
+| `lib/agent/jev.ts` | Jev intent classifier client |
+| `lib/agent/claude.ts` | Claude responder: tools, tool-result round trip, grounding rewrite |
+| `lib/agent/context.ts` | Grounding context built from the scoring result |
+| `lib/agent/grounding.ts` | Checks every number in a reply against the context |
+| `lib/agent/log.ts` | `agent_logs` insert and reporting SQL |
+| `lib/agent/types.ts` | Intents, actions, chat reply type |
 | `lib/scoring/score.ts` | Deterministic scoring: filters, sub-scores, weights, ranking (pure) |
 | `lib/scoring/types.ts` | Scoring input/output types |
 | `lib/scoring/loadInputs.ts` | Builds `AreaInputs` from the database and commute times |

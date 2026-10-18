@@ -17,12 +17,14 @@ type Props = {
   onChange: (p: Priorities) => void;
   // Shown under the Safety slider while crime data isn't loaded yet.
   unavailable?: SubScoreKey[];
+  // Skip the pair cards (e.g. the form was refilled after a chat change).
+  startWithSliders?: boolean;
 };
 
 // Step 1: up to six "which matters more?" cards (optional). Step 2: sliders, always editable.
-export default function PriorityPicker({ priorities, onChange, unavailable = [] }: Props) {
+export default function PriorityPicker({ priorities, onChange, unavailable = [], startWithSliders = false }: Props) {
   // `null` = still answering cards; the array holds one answer per card answered so far.
-  const [choices, setChoices] = useState<SubScoreKey[] | null>([]);
+  const [choices, setChoices] = useState<SubScoreKey[] | null>(startWithSliders ? null : []);
 
   const answering = choices !== null && choices.length < PAIR_CARDS.length;
 
