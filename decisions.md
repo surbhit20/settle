@@ -73,3 +73,62 @@ Context: `docker compose up` failed on the owner's Apple Silicon Mac: `postgis/p
 Decision: Add `platform: linux/amd64` to the `db` service; Docker Desktop runs it under emulation.
 Alternatives considered: A community multi-arch image (e.g. `imresamu/postgis`): native speed, but a less official source. Homebrew PostGIS: see D001.
 Consequences: The DB runs slower than native. That doesn't matter at ~200 ZCTAs, but bulk crime loads (M4) may be noticeably slower. Revisit if they are; hosted deploy DBs (M6) are unaffected. Verified: PostGIS 3.5, all five tables created, `/api/health` returns ok.
+
+## D009: Region membership: a ZCTA belongs to the county holding most of its land
+Date: 2026.10.18
+Status: accepted
+Context: ZCTAs do not nest inside counties. 214 ZCTAs touch the five counties; some barely (94920 Tiburon is 99.9% Marin).
+Decision: Use the Census 2020 ZCTA-to-county relationship file (`tab20_zcta520_county20_natl.txt`). Each ZCTA gets the county with the largest `AREALAND_PART` (ties broken by lower FIPS). Keep it only if that county is one of the five. Result: **208 areas** (Alameda 49, Contra Costa 43, San Francisco 28, San Mateo 30, Santa Clara 58). Dropped: 94920 (Marin), 95023 (San Benito), 95033 and 95076 (Santa Cruz), 95219 and 95377 (San Joaquin).
+Alternatives considered: Any overlap (pulls in Tiburon, Watsonville, Tracy); spatial intersection with county shapes (same answer, more code).
+Consequences: Some included ZCTAs extend slightly outside the five counties; that's fine for a map of where to live. `county` is a single label even for straddling ZCTAs.
+
+## D010: Population-weighted centroids from 2020 block group centers of population
+Date: 2026.10.18
+Status: accepted
+Context: The brief asks for population-weighted centroids (used for Mireye lookups in M2 and commute origins in M3). Census does not publish them for ZCTAs.
+Decision: Use the Census 2020 block group "centers of population" file for California (`CenPop2020_Mean_BG06.txt`, 1 MB). Take the population-weighted mean of the block group centers inside each ZCTA. If that mean falls outside the polygon (crescent shapes around water), snap to the nearest populated block group center. If a ZCTA has no populated block group center, use shapely's `representative_point()` (always inside). Verified: all 208 centroids fall inside their own ZCTA.
+Alternatives considered: Geometric centroid (can land in the bay or on empty hills, which is wrong for flood/fire lookups); block-level weighting (needs the ~400 MB California block file for a small gain).
+Consequences: Weights come from 2020 decennial counts, not current ACS estimates. That's fine for locating where people live.
+
+## D011: Area names from the Census place where most residents live
+Date: 2026.10.18
+Status: accepted
+Context: ZCTAs have no names; users need "Oakland 94611", not "94611".
+Decision: Tag each populated block group center with the 2020 Census place (city or CDP, `cb_2020_06_place_500k`) containing it, sum population per (ZCTA, place), and use the largest. Unpopulated ZCTAs use the place containing their centroid. Otherwise "Unincorporated <County>" (7 areas, e.g. 94128 SFO, the San Mateo coast). The UI always shows the ZIP alongside the name, since names repeat (83 distinct names across 208 areas).
+Alternatives considered: Place containing the centroid. Tried first; it mislabeled 94611 (mostly Oakland) as "Piedmont".
+Consequences: No neighborhood names inside big cities (all SF ZCTAs are "San Francisco"). Neighborhood names could come later from a city-specific dataset.
+
+## D012: Serve areas as GeoJSON from PostGIS, lightly simplified
+Date: 2026.10.18
+Status: accepted
+Context: The map needs the 208 boundaries.
+Decision: `GET /api/areas` returns a GeoJSON FeatureCollection built with `ST_AsGeoJSON(ST_SimplifyPreserveTopology(geometry, 0.0003), 5)` (~30 m tolerance, 5 decimals ≈ 1 m). About 375 KB uncompressed vs 521 KB unsimplified. Source shapes are the 1:500k generalized Census cartographic boundaries, clipped to shoreline.
+Alternatives considered: Vector tiles (pg_tileserv or Martin): overkill for 208 polygons. A static GeoJSON file in `public/`: one less request path, but scores will be joined per request in M3 anyway.
+Consequences: Per-polygon simplification can leave hairline gaps between neighbors; not visible at this tolerance. Stored geometry stays unsimplified for spatial joins.
+
+## D013: Basemap from OpenFreeMap (Positron style)
+Date: 2026.10.18
+Status: accepted
+Context: The brief asks for MapLibre with free vector tiles.
+Decision: Use `https://tiles.openfreemap.org/styles/positron`: free, no API key, no request limits published, OpenStreetMap data. Attribution is rendered by MapLibre's attribution control from the style.
+Alternatives considered: MapTiler and Stadia (need keys, free-tier limits); Protomaps self-hosted PMTiles (more setup).
+Consequences: Depends on a donation-funded service with no SLA. Swapping basemaps is a one-line change in `components/AreaMap.tsx`.
+
+## D014: MapLibre GL JS 6 integration workarounds
+Date: 2026.10.18
+Status: accepted
+Context: `maplibre-gl@6.15.0` with Next.js 16 (Turbopack) rendered a blank map, for two reasons.
+Decision:
+1. **Worker file:** MapLibre 6 loads its web worker from a file next to its own bundle, which Turbopack doesn't serve. `scripts/copy-maplibre-worker.mjs` (run as npm `postinstall`) copies `maplibre-gl-worker.mjs` into `public/maplibre/` (git-ignored), and the component calls `setWorkerUrl("/maplibre/maplibre-gl-worker.mjs")`.
+2. **Load event:** the map's `load` event never fired, because OpenFreeMap's low-zoom raster source (`ne2_shaded`, maxzoom 6) never reports loaded when the map opens at zoom 8.6. Our layers are added on `style.load` instead, which fires once the style is parsed.
+Also: MapLibre's CSS forces `position: relative` on the map container, so the container is sized with `h-full w-full` rather than absolute positioning.
+Alternatives considered: Pinning MapLibre 4.x (older API; postpones the problem); react-map-gl (another abstraction layer for a React beginner, and it still needs the worker fix).
+Consequences: A fresh clone needs `npm install` (which runs the copy) before `npm run dev`. Re-check both workarounds when upgrading MapLibre.
+
+## D015: Census Data API requires a key; population loads as NULL until it is set
+Date: 2026.10.18
+Status: accepted
+Context: `api.census.gov` now redirects keyless requests to a "Missing Key" page. The owner chose to get a free key rather than switch to 2020 decennial counts.
+Decision: Add `CENSUS_API_KEY` to `.env.example`. `fetch_census.py` calls ACS 5-year **2024** (2020–2024 estimates), variable `B01003_001E`, for all ZCTAs in one request, cached to `data/raw/census/acs5_2024_B01003_zcta.json`. `load_areas.py` still runs without that file and loads population as NULL with a warning, so the map works meanwhile. ACS "no estimate" sentinels (negative values) become NULL, never zero.
+Alternatives considered: 2020 decennial block group counts (keyless, but older and approximate).
+Consequences: Re-run `fetch_census` then `load_areas` once the key is in `.env.local`.

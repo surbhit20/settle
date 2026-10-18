@@ -49,3 +49,6 @@ __pycache__/
 # cached raw API responses and downloads (can be large; rebuildable)
 data/raw/*
 !data/raw/.gitkeep
+
+# copied from node_modules by scripts/copy-maplibre-worker.mjs
+/public/maplibre/
