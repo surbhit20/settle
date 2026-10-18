@@ -2,7 +2,7 @@
 
 How the code actually executes, end to end. Must match the current code (see CLAUDE.md section 1.2).
 
-**Current state: M5 (chat agent: Jev router, deterministic fast path, Claude fallback, live map updates, agent logs).** Sections marked *(planned)* describe structure that does not exist in code yet.
+**Current state: M6 in progress (loading states, mobile layout, sources page, README); M0–M5 complete.** Sections marked *(planned)* describe structure that does not exist in code yet.
 
 ---
 
@@ -77,7 +77,7 @@ Shared helpers:
 ### 3a. Page load
 1. Browser `GET /` → `app/layout.tsx` + `app/page.tsx` (server-rendered header) → `<Explorer />`.
 2. `components/Explorer.tsx` (client) renders the sidebar (`<SearchForm>`) and `<AreaMap scores={null}>`.
-3. `components/AreaMap.tsx` dynamically imports `maplibre-gl`, calls `setWorkerUrl()` (D014), creates the OpenFreeMap map (D013), and on `style.load` fetches `GET /api/areas` → adds the `areas` source (`promoteId: "zcta"`), `areas-fill` (rent colors from `lib/rentScale.ts`) and `areas-outline`, then sets `ready`.
+3. `components/AreaMap.tsx` dynamically imports `maplibre-gl`, calls `setWorkerUrl()` (D014), creates the OpenFreeMap map (D013, compact attribution), and on `style.load` fetches `GET /api/areas` → `lib/geo.ts → geojsonBounds()` → `fitBounds` → adds the `areas` source (`promoteId: "zcta"`), `areas-fill` (rent colors from `lib/rentScale.ts`) and `areas-outline`, then sets `ready`. "Loading map…" shows until the `areas` source fires `sourcedata` with `isSourceLoaded` (`painted`, D037).
 4. `GET /api/areas` → `app/api/areas/route.ts` → `lib/areas.ts → getAreasGeoJSON()`: `areas` LEFT JOIN `area_metrics` (`rent_zori_usd`) → simplified GeoJSON with `rent_usd` per feature (D012).
 
 ### 3b. Submitting the form (the main M3 path)
@@ -98,7 +98,12 @@ Shared helpers:
 2. Sidebar shows `<AreaCard key={zcta} scoreSection={<ScoreBreakdown …/>}>`. `ScoreBreakdown` (from the scoring result, no extra request) shows score, rank, partial label, each sub-score with weight, explanation and source links, or the filter reason.
 3. `AreaCard` fetches `GET /api/areas/[zcta]` → `app/api/areas/[zcta]/route.ts` → `lib/areaDetails.ts → getAreaDetails()` → housing, five hidden-risk flags with "N of 208 flagged", "City-wide crime (FBI)" (context only, D033), extras, all with `<SourceLink>` (D019, D021, D023, D033).
 
-### 3d. Health
+### 3d. Layout and other pages
+- Phones (< 768 px): map first at 55% height, sidebar below, page scrolls; legend collapses to its title. Desktop: sidebar left (own scroll), map fills the rest (D037).
+- `AreaMap` shows an "Updating scores…" pill while `Explorer` is `loading`.
+- `GET /sources` → `app/sources/page.tsx`: static list of every data source with link, use and license, plus caveats; linked from the header in `app/page.tsx`.
+
+### 3e. Health
 `GET /api/health` → `app/api/health/route.ts` → `SELECT PostGIS_Version()` → `{ ok, postgis }` (200) or `{ ok: false, error }` (503).
 
 ## 4. Agent flow (D036)
@@ -121,7 +126,10 @@ Shared helpers:
 | Path | Owns |
 |---|---|
 | `app/layout.tsx` | Root HTML shell, fonts, page metadata |
-| `app/page.tsx` | Home page: header + `<Explorer />` |
+| `app/page.tsx` | Home page: header (with "Data sources" link) + `<Explorer />` |
+| `app/sources/page.tsx` | Data sources and caveats page |
+| `lib/geo.ts` | `geojsonBounds()` for fitting the map to all areas |
+| `README.md` | Overview, screenshots, setup, pipeline order, tests |
 | `components/Explorer.tsx` | Page state: request, result, selection; calls `/api/score`; live slider rescoring; applies chat actions |
 | `components/ChatBox.tsx` | Chat UI: examples, messages with route and latency, sends `/api/chat` |
 | `components/SearchForm.tsx` | Salary, office, max commute, budget inputs + priorities |

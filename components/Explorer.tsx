@@ -28,6 +28,7 @@ export default function Explorer() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0); // ignore responses to requests that have been superseded
 
+
   async function runScore(req: ScoreRequest) {
     const id = ++requestIdRef.current;
     setLoading(true);
@@ -90,8 +91,13 @@ export default function Explorer() {
   const selectedFiltered = result?.filtered.find((a) => a.zcta === selectedZcta);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <aside className="w-full shrink-0 overflow-y-auto border-zinc-200 p-4 md:w-96 md:border-r dark:border-zinc-800">
+    // Phones: map on top (55% of the screen), sidebar below, the whole page scrolls; a card
+    // opened from the map starts right under it, so both stay in view.
+    // Desktop (md and up): sidebar left with its own scroll, map fills the rest.
+    <div className="flex flex-1 flex-col md:min-h-0 md:flex-row">
+      <aside
+        className="w-full shrink-0 border-zinc-200 p-4 md:w-96 md:overflow-y-auto md:border-r dark:border-zinc-800"
+      >
         {selectedZcta ? (
           // key: a new ZIP means a new card (and a fresh fetch), not an update to the old one.
           <AreaCard
@@ -123,6 +129,11 @@ export default function Explorer() {
             unavailable={result?.unavailableEverywhere ?? ["safety"]}
           />
           {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p>}
+          {!result && !loading && !error && (
+            <p className="text-xs text-zinc-500">
+              The map shows typical rent until you search. Results take a couple of seconds the first time.
+            </p>
+          )}
           {result && (
             <>
               <p className="text-xs text-zinc-500">
@@ -141,11 +152,12 @@ export default function Explorer() {
         )}
       </aside>
 
-      <div className="relative min-h-[60vh] flex-1">
+      <div className="relative order-first h-[55vh] shrink-0 md:order-none md:h-auto md:flex-1">
         <AreaMap
           scores={scores}
           selectedZcta={selectedZcta}
           compared={compared}
+          busy={loading}
           onSelect={setSelectedZcta}
           office={result ? { lat: result.office.lat, lng: result.office.lng } : null}
         />

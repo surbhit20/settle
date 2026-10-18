@@ -374,3 +374,17 @@ Decision:
 - Shared scoring pipeline moved to `lib/scoring/run.ts` (used by `/api/score` and `/api/chat`).
 Alternatives considered: Asking Jev to extract parameters (its question types are choice / score / yes-no, with no extraction); sending everything to Claude (slow and paid for routine "what if" questions); effort `low` (faster, but wrong-area numbers).
 Consequences: Measured during development (test traffic, not usage): fast path ~0.1–0.3 s; Claude 5–20 s at medium effort. Streaming Claude's reply would improve perceived speed (M6 candidate). The safety-weighting and missing-data caveats from D034 also shape what Claude can say.
+
+## D037: M6 polish: loading states, mobile layout, sources page, README; history scrubbed before first push
+Date: 2026.10.18
+Status: accepted
+Context: M6 asks for loading and empty states, a mobile layout, source attributions and a README. The owner also asked to push to github.com/surbhit20/settle (public).
+Decision:
+- **Map fits the region** (`lib/geo.ts → geojsonBounds()`, `fitBounds` with 16 px padding) instead of a fixed center and zoom, so all 208 areas fit on any screen; Gilroy was cut off before.
+- **Loading states:** "Loading map…" stays up until the `areas` GeoJSON source reports `isSourceLoaded` (via `sourcedata`; not the map's `idle` event, which never fires because of the basemap raster, D014). The map could otherwise sit blank for several seconds. An "Updating scores…" pill shows while `/api/score` runs. A hint under the form explains that the map shows rent until a search. Existing: chat "Thinking…", card "Loading…", "No areas match" with suggestions, error banners.
+- **Mobile (< 768 px):** map on top at 55% of the screen, sidebar below, and the whole page scrolls. A card opened from the map appears right under it, so map and card stay in view; an auto-scroll was tried and dropped (the map's tap handling cancelled it, and it hid the map). Legend collapses to a tappable title; MapLibre attribution is compact.
+- **Sources page** (`/sources`, linked in the header): every dataset and service with link, use and stated license, plus caveats. OSM/openrouteservice/OpenFreeMap attribution also stays on the map.
+- **README** with screenshots (`docs/screenshots/`), setup, keys, pipeline run order, tests, layout.
+- **Secret found and scrubbed before the first push:** the real `FBI_API_KEY` value had been written into `.env.example` and committed in 4 commits (from the FBI commit onward). It was caught by scanning history for the actual `.env.local` values, then removed with `git filter-branch` (tree filter blanking the line). Backup refs, reflog and the stash pointing at the old commits were cleared and garbage-collected; a byte-level scan of history and the object store found none of the 8 keys. Only then was `main` pushed. The key was never on any remote.
+Alternatives considered: A separate mobile view with tabs (more code than the stacked layout needs); keeping the fixed zoom with a mobile-specific value (breaks on other sizes).
+Consequences: Before every commit and push, scan staged content for the real key values, not just filenames. Rotating the FBI key is optional since it never left the machine; it's free if wanted.

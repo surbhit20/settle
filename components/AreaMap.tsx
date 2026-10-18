@@ -7,6 +7,7 @@ import type { Map as MapLibreMap, MapGeoJSONFeature, Marker } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css";
 import { NO_DATA_COLOR, rentFillExpression, rentLegend } from "@/lib/rentScale";
 import { FILTERED_COLOR, scoreFillExpression, scoreLegend } from "@/lib/scoreScale";
+import { geojsonBounds } from "@/lib/geo";
 
 // Free vector basemap, no API key (decisions.md D013).
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
@@ -25,11 +26,12 @@ type Props = {
   scores: Record<string, number> | null;
   selectedZcta: string | null;
   compared?: string[]; // areas outlined after a chat "compare"
+  busy?: boolean; // scoring in progress: show a small "Updating scores" pill
   onSelect: (zcta: string) => void;
   office: { lat: number; lng: number } | null;
 };
 
-export default function AreaMap({ scores, selectedZcta, compared = [], onSelect, office }: Props) {
+export default function AreaMap({ scores, selectedZcta, compared = [], busy = false, onSelect, office }: Props) {
   // useRef holds values that survive re-renders without causing one.
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -48,6 +50,12 @@ export default function AreaMap({ scores, selectedZcta, compared = [], onSelect,
   const [ready, setReady] = useState(false);
   const [hovered, setHovered] = useState<Hovered | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Phones start with the legend collapsed (it would cover most of a small map); desktop CSS
+  // always shows it. Tapping the legend title toggles it.
+  const [legendOpen, setLegendOpen] = useState(false);
+  // True once MapLibre has finished processing the area shapes, so they can be drawn. Until then
+  // the map can be blank for several seconds even though the layer exists (`ready`).
+  const [painted, setPainted] = useState(false);
 
   // 1. Create the map once.
   useEffect(() => {
@@ -65,6 +73,9 @@ export default function AreaMap({ scores, selectedZcta, compared = [], onSelect,
         style: BASEMAP_STYLE,
         center: BAY_AREA_CENTER,
         zoom: 8.6,
+        // Compact "ⓘ" attribution: the expanded text covered the legend on phones. Full credits
+        // are also on the /sources page.
+        attributionControl: { compact: true },
       });
       mapRef.current = map;
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
@@ -79,8 +90,19 @@ export default function AreaMap({ scores, selectedZcta, compared = [], onSelect,
         const areas = await res.json();
         if (cancelled) return;
         zctasRef.current = areas.features.map((f: { id: string }) => f.id);
+        // Fit all 208 areas on screen, whatever the screen size (instead of a fixed zoom).
+        const bounds = geojsonBounds(areas);
+        if (bounds) map.fitBounds(bounds, { padding: 16, duration: 0 });
 
         map.addSource("areas", { type: "geojson", data: areas, promoteId: "zcta" });
+        // Not the map's "idle" event: it waits for every basemap source, and one never finishes (D014).
+        const onData = (e: { sourceId?: string; isSourceLoaded?: boolean }) => {
+          if (e.sourceId === "areas" && e.isSourceLoaded) {
+            setPainted(true);
+            map.off("sourcedata", onData);
+          }
+        };
+        map.on("sourcedata", onData);
         map.addLayer({
           id: "areas-fill",
           type: "fill",
@@ -199,6 +221,19 @@ export default function AreaMap({ scores, selectedZcta, compared = [], onSelect,
       {/* h-full, not absolute positioning: MapLibre's CSS forces position: relative on this div. */}
       <div ref={containerRef} className="h-full w-full" />
 
+      {!painted && !error && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="rounded-md bg-white/95 px-3 py-2 text-sm text-zinc-600 shadow dark:bg-zinc-900/95 dark:text-zinc-300">
+            Loading map…
+          </span>
+        </div>
+      )}
+      {busy && ready && (
+        <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1 text-xs text-white shadow">
+          Updating scores…
+        </div>
+      )}
+
       {(hovered || error) && (
         <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-white/95 px-3 py-2 text-sm shadow dark:bg-zinc-900/95">
           {error ? (
@@ -220,8 +255,18 @@ export default function AreaMap({ scores, selectedZcta, compared = [], onSelect,
         </div>
       )}
 
-      <div className="absolute bottom-8 right-3 rounded-lg bg-white/95 p-3 text-xs shadow-md dark:bg-zinc-900/95">
-        <div className="mb-1 font-semibold">{scores ? "Your score" : "Typical monthly rent"}</div>
+      <div className="absolute bottom-8 right-3 max-w-[calc(100%-1.5rem)] rounded-lg bg-white/95 p-2 text-xs shadow-md md:p-3 dark:bg-zinc-900/95">
+        <button
+          type="button"
+          onClick={() => setLegendOpen((o) => !o)}
+          className="font-semibold md:pointer-events-none"
+          aria-expanded={legendOpen}
+        >
+          {scores ? "Your score" : "Typical monthly rent"}
+          <span className="ml-1 text-zinc-500 md:hidden">{legendOpen ? "▾" : "▸"}</span>
+        </button>
+        {/* On phones the list shows only when opened; from md (768 px) up it always shows. */}
+        <div className={legendOpen ? "mt-1 block" : "hidden md:mt-1 md:block"}>
         <ul>
           {legend.map((row) => (
             <li key={row.label} className="flex items-center gap-2">
@@ -246,6 +291,7 @@ export default function AreaMap({ scores, selectedZcta, compared = [], onSelect,
           <a className="underline" href={CENSUS_ZCTA_URL} target="_blank" rel="noreferrer">
             Census ZCTAs
           </a>
+        </div>
         </div>
       </div>
     </div>
