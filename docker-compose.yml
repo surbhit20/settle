@@ -1,0 +1,30 @@
+# Local development database: Postgres 17 + PostGIS 3.5.
+# Start:  docker compose up -d
+# Reset:  docker compose down -v && docker compose up -d   (re-runs db/init/*.sql)
+#
+# Host port is 5433 (not 5432) so it does not clash with a Homebrew Postgres on this Mac.
+# The password below is a local-only dev default, not a secret; override via env if you like.
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    # The official image only ships amd64; on Apple Silicon Docker runs it under emulation (see D008).
+    platform: linux/amd64
+    container_name: settle-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-settle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-settle}
+      POSTGRES_DB: ${POSTGRES_DB:-settle}
+    ports:
+      - "5433:5432"
+    volumes:
+      - settle-pgdata:/var/lib/postgresql/data
+      # Files here run once, in name order, the first time the volume is created.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-settle} -d ${POSTGRES_DB:-settle}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  settle-pgdata:
