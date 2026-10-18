@@ -347,3 +347,14 @@ Decision:
 - **Scoring:** `loadInputs.ts` reads the latest `crime_aggregates` row per area and attaches the city's dataset as the safety source (SFPD/DataSF, OPD/City of Oakland, San Jose PD calls with a report or arrest). Explanations say "violent and property incidents per 1,000 residents a year; safer than N% of the 69 areas with data". Areas without neighborhood data say so and point to the city-wide FBI figure (D033).
 Alternatives considered: Leaving low-confidence labels out (drops ~10k records, some real crimes); keeping Jev's top choice (death reports stay violent); classifying everything with Claude (more cost and latency than the brief intends).
 Consequences: Safety now ranks within the 69 covered areas. The 135 areas without city data are reweighted and labeled partial per CLAUDE.md section 5.3, so with a high safety slider they can still rank near the top (e.g. Daly City 94014 at #1 from 1 Market St). That's the brief's rule, flagged for owner review.
+
+## D035: Claude fallback run: crime rates are final
+Date: 2026.10.18
+Status: accepted (resolves the block in D034)
+Context: With `ANTHROPIC_WORKSPACE_ID` set, the Claude fallback from D034 could run.
+Decision: Ran `classify_crime` (Claude on the 229 labels with Jev confidence < 0.7) and `aggregate_crime`.
+- Cost and time: 124,486 input + 18,377 output tokens on `claude-opus-5-5` (≈ $0.87), ~10 minutes sequential. All answers cached in `data/raw/claude/crime/`; 0 labels left `pending_claude`.
+- Claude changed **109 of 229** labels (6,190 records). Main fixes: deaths of unknown cause and coroner cases (Oakland "SC UNEXPLAINED DEATH", SF "DEATH REPORT, CAUSE UNKNOWN", San Jose "CORONERS CASE") and victimless weapon possession → minor; San Jose "FELONY HIT AND RUN" → violent.
+- **Judgment call kept:** San Jose "DISTURBANCE, FAMILY" (1,383 calls with a report) and "DISTURBANCE, FAMILY (COMBINED EVENT)" → minor. Some involve violence, many don't; San Jose records charged domestic violence under other call types. Revisit if San Jose looks too safe relative to the other cities.
+- Effect: all 69 rates now `final`. Median change −2.7%; largest drops in San Jose (95139: 15.7 → 12.7 per 1,000). No area moved more than 3 places among the 69.
+Consequences: Records by class after the fallback: property 85,039, violent 34,445, minor 73,499. Re-running is free unless new labels appear (e.g. after refreshing the crime window).

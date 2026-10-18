@@ -2,7 +2,7 @@
 
 How the code actually executes, end to end. Must match the current code (see CLAUDE.md section 1.2).
 
-**Current state: M4 (crime data, Jev classification, safety score; Claude fallback pending a workspace ID).** Sections marked *(planned)* describe structure that does not exist in code yet.
+**Current state: M4 (crime data, Jev + Claude classification, safety score).** Sections marked *(planned)* describe structure that does not exist in code yet.
 
 ---
 
