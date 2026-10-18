@@ -28,9 +28,19 @@ Scripts live in `pipeline/settle_pipeline/`. Run each with `uv run --project pip
 | 4 | `load_mireye` | `data/raw/mireye/{batches,retries}/` only | Upserts 14 metrics × 208 areas into `area_metrics`. |
 | 5 | `fetch_zillow` | files.zillowstatic.com | `data/raw/zillow/` ZORI and ZHVI CSVs. Skips files that exist. |
 | 6 | `load_zillow` | `data/raw/zillow/` only | Upserts 4 metrics × 208 areas into `area_metrics`. |
-| 7 | *(planned, M4)* load crime | City open-data portals, Jev | `data/raw/crime/`, then `crime_aggregates` |
+| 7 | `fetch_crime` | data.sf.gov (`wg3w-h783`), data.oaklandca.gov (`ppgh-7dqv`), data.sanjoseca.gov (quarterly calls CSVs) | `data/raw/crime/{sf,oakland}/page_*.json`, `data/raw/crime/sanjose/calls_*.csv` for 2025-07 to 2026-06. Skips cached files. |
+| 8 | `geocode_sanjose` | San Jose calls; US Census batch geocoder (free) | `data/raw/crime/sanjose/geocode/pass*_batch*_{in,out}.csv`, `street_to_latlng.json` |
+| 9 | `prepare_crime` | steps 7–8 output, `areas` | `data/processed/crime_records.csv.gz` (normalized records with `zcta`), `crime_labels.json` (1,582 labels to classify) |
+| 10 | *(planned, M4: needs Jev details)* classify labels | `crime_labels.json`, Jev | cached classifications |
+| 11 | *(planned, M4)* aggregate crime | records + classifications, `areas`, Census places + block groups | `crime_aggregates` |
 
 Steps 3–4 and 5–6 are independent of each other; both need step 2 first.
+
+### Crime steps in detail (D031, D032)
+- `fetch_crime`: Socrata `$select/$where/$order/$limit/$offset` paging (50,000 rows per page) for SF and Oakland; CKAN resource CSV downloads for San Jose.
+- `geocode_sanjose`: `sanjose.select_incidents()` (dedupe `EID`, keep report/arrest/citation) → `block_candidates()` per address → up to 3 Census batch passes over still-unmatched addresses → `ADDRESS → [lat, lng] | null`.
+- `prepare_crime`: `crime.normalize_sf/normalize_oakland/normalize_sanjose()` → one table (`city, incident_key, occurred_at, label, lat, lng`) → `placement_rates()` → geopandas `sjoin` of points within `areas` geometries (read with `ST_AsBinary`) → `zcta`.
+- *(planned)* aggregate: `crime_aggregate.city_coverage()` (residents inside covered cities) → `incidents_by_class()` (most severe class per incident) → `aggregate()` (counts, scaled violent+property per 1,000 covered residents, `null` below 50% coverage or 1,000 residents) → `crime_aggregates`.
 
 ### `load_areas` in detail (`load_areas.py → areas.py`)
 1. Read the relationship file, then `assign_counties()`: each ZCTA's county is the one with the most land; keep it only if that county is one of the 5 (D009).
@@ -141,6 +151,12 @@ Shared helpers:
 | `pipeline/settle_pipeline/zillow.py` | Pure transform: latest value and 3-yr change per ZIP |
 | `pipeline/settle_pipeline/load_zillow.py` | Loads Zillow metrics into `area_metrics` |
 | `pipeline/settle_pipeline/metrics.py` | `MetricRow` type and the shared `area_metrics` upsert |
+| `pipeline/settle_pipeline/fetch_crime.py` | Downloads 12 months of SF, Oakland and San Jose police data |
+| `pipeline/settle_pipeline/sanjose.py` | Pure San Jose helpers: counted dispositions, block-address candidates, Census output parsing |
+| `pipeline/settle_pipeline/geocode_sanjose.py` | Free Census batch geocoding of San Jose call addresses |
+| `pipeline/settle_pipeline/crime.py` | Pure normalization of the three cities into one record table; placement rates |
+| `pipeline/settle_pipeline/prepare_crime.py` | Builds normalized records with ZCTAs and the label list for Jev |
+| `pipeline/settle_pipeline/crime_aggregate.py` | Pure coverage, per-incident severity, and rate aggregation |
 | `vitest.config.ts` | TS test config (`*.test.ts`, `@/` alias) |
 | `pipeline/pyproject.toml` | Python deps and pytest config |
 | `decisions.md` | Decision log |

@@ -52,3 +52,6 @@ data/raw/*
 
 # copied from node_modules by scripts/copy-maplibre-worker.mjs
 /public/maplibre/
+
+# derived pipeline outputs (rebuildable from data/raw)
+data/processed/
