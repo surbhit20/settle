@@ -86,7 +86,7 @@ export function safetySubScore(area: AreaInputs, regionRates: number[]): SubScor
   if (rate === null) {
     return {
       score: null,
-      explanation: "No crime data for this area yet, so safety is left out of its score.",
+      explanation: "No neighborhood crime data here (only SF, Oakland and San Jose publish it), so safety is left out of its score. The card shows a city-wide FBI figure for context.",
       inputs: { crime_rate_per_1000: null },
       sources: area.crimeSource ? [area.crimeSource] : [],
     };
@@ -94,7 +94,7 @@ export function safetySubScore(area: AreaInputs, regionRates: number[]): SubScor
   const pct = midRankPercentile(rate, regionRates);
   return {
     score: round1(100 * (1 - pct)),
-    explanation: `${rate.toFixed(1)} incidents per 1,000 residents; safer than ${Math.round((1 - pct) * 100)}% of areas with data.`,
+    explanation: `${rate.toFixed(1)} violent and property incidents per 1,000 residents a year; safer than ${Math.round((1 - pct) * 100)}% of the ${regionRates.length} areas with data.`,
     inputs: { crime_rate_per_1000: round1(rate), percentile: round1(pct * 100) },
     sources: area.crimeSource ? [area.crimeSource] : [],
   };

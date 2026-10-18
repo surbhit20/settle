@@ -2,14 +2,14 @@
 
 How the code actually executes, end to end. Must match the current code (see CLAUDE.md section 1.2).
 
-**Current state: M3 (personal scoring, heat map, top 5).** Sections marked *(planned)* describe structure that does not exist in code yet.
+**Current state: M4 (crime data, Jev classification, safety score; Claude fallback pending a workspace ID).** Sections marked *(planned)* describe structure that does not exist in code yet.
 
 ---
 
 ## 1. Local setup
 
 1. `docker compose up -d`: starts `settle-db` (Postgres 17 + PostGIS 3.5, amd64 image emulated on Apple Silicon) on `localhost:5433`.
-   On first start with an empty volume, it runs `db/init/*.sql` in name order: `001_schema.sql` enables PostGIS and creates `areas`, `area_metrics`, `crime_aggregates`, `commute_cache` and `agent_logs`; `002_area_metrics_text_confidence.sql` makes `area_metrics.confidence` text and adds `notes` and `dataset_vintage`; `003_geocode_cache.sql` creates `geocode_cache`.
+   On first start with an empty volume, it runs `db/init/*.sql` in name order: `001_schema.sql` enables PostGIS and creates `areas`, `area_metrics`, `crime_aggregates`, `commute_cache` and `agent_logs`; `002_area_metrics_text_confidence.sql` makes `area_metrics.confidence` text and adds `notes` and `dataset_vintage`; `003_geocode_cache.sql` creates `geocode_cache`; `004_crime_aggregates_sources.sql` adds `cities`, `covered_share`, `covered_population`, `classification_status` to `crime_aggregates`.
 2. `cp .env.example .env.local`, then fill in keys. The app and the pipeline both read `.env.local`.
 3. `npm install`. Its `postinstall` step runs `scripts/copy-maplibre-worker.mjs`, which copies MapLibre's worker into `public/maplibre/`.
 4. `uv sync --project pipeline`: Python environment for the pipeline.
@@ -33,8 +33,8 @@ Scripts live in `pipeline/settle_pipeline/`. Run each with `uv run --project pip
 | 9 | `prepare_crime` | steps 7–8 output, `areas` | `data/processed/crime_records.csv.gz` (normalized records with `zcta`), `crime_labels.json` (1,582 labels to classify) |
 | 10 | `fetch_fbi` | `areas` (name, county); FBI CDE API (`FBI_API_KEY`) | `data/raw/fbi/agencies_CA.json`, `summarized_<ORI>_<offense>_07-2025_06-2026.json` (62 agencies × 2) |
 | 11 | `load_fbi` | `data/raw/fbi/` only | `area_metrics`: `fbi_violent_per_1000`, `fbi_property_per_1000` for all 208 areas (card context, not scored) |
-| 12 | *(planned, M4: needs Jev details)* classify labels | `crime_labels.json`, Jev | cached classifications |
-| 13 | *(planned, M4)* aggregate crime | records + classifications, `areas`, Census places + block groups | `crime_aggregates` |
+| 12 | `classify_crime` | `crime_labels.json`; Jev (`JEV_API_KEY`); Claude for confidence < 0.7 (`ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`) | `data/raw/jev/crime/*.json`, `data/raw/claude/crime/*.json`, `data/processed/crime_classes.json` |
+| 13 | `aggregate_crime` | records + `crime_classes.json`, `areas`, Census places + block groups | `crime_aggregates` (period `2025-07_2026-06`, 69 rows) |
 
 Steps 3–4 and 5–6 are independent of each other; both need step 2 first.
 
@@ -43,7 +43,8 @@ Steps 3–4 and 5–6 are independent of each other; both need step 2 first.
 - `geocode_sanjose`: `sanjose.select_incidents()` (dedupe `EID`, keep report/arrest/citation) → `block_candidates()` per address → up to 3 Census batch passes over still-unmatched addresses → `ADDRESS → [lat, lng] | null`.
 - `prepare_crime`: `crime.normalize_sf/normalize_oakland/normalize_sanjose()` → one table (`city, incident_key, occurred_at, label, lat, lng`) → `placement_rates()` → geopandas `sjoin` of points within `areas` geometries (read with `ST_AsBinary`) → `zcta`.
 - `fetch_fbi` / `load_fbi` (D033): `fbi.agency_for_area()` maps each area to its city police department or county sheriff → one `/summarized/agency/{ori}/{offense}` call per agency and offense (1.1 s apart, cached) → `fbi.summarize()` (12-month total, annualized if months are missing, ÷ agency population × 1,000; California average from the same response) → `metrics.upsert_metrics()`.
-- *(planned)* aggregate: `crime_aggregate.city_coverage()` (residents inside covered cities) → `incidents_by_class()` (most severe class per incident) → `aggregate()` (counts, scaled violent+property per 1,000 covered residents, `null` below 50% coverage or 1,000 residents) → `crime_aggregates`.
+- `classify_crime` (D034): `jev.crime_request()` per uncached label → `post_with_retry()` (4 threads) → cache → labels with confidence < 0.7 → `claude_classify.classify_with_claude()` (structured output, effort low, refusal fallback; stops cleanly if Claude is unreachable, leaving them `pending_claude`) → `crime_classes.json`.
+- `aggregate_crime`: `crime_aggregate.city_coverage()` (residents inside covered cities) → `incidents_by_class()` (most severe class per incident) → `aggregate()` (counts, scaled violent+property per 1,000 covered residents, `null` below 50% coverage or 1,000 residents) → `DELETE` + `INSERT` this period's rows in `crime_aggregates`.
 
 ### `load_areas` in detail (`load_areas.py → areas.py`)
 1. Read the relationship file, then `assign_counties()`: each ZCTA's county is the one with the most land; keep it only if that county is one of the 5 (D009).
@@ -86,7 +87,7 @@ Shared helpers:
    1. `await connection()`; `lib/scoring/request.ts → parseScoreRequest()` validates the body (else 400).
    2. `lib/geocode.ts → geocodeOffice()`: `SELECT … FROM geocode_cache WHERE address_key = $1`; on a miss, `mireyeGeocoder` → **Mireye `POST /v1/geocode` (1 credit)** → `parseGeocodeResponse()` (accepts `rooftop` / `range_interpolation`; maps `address_too_coarse` / `address_not_found`) → `INSERT INTO geocode_cache`. A refusal → 422 with a message for the form (D025).
    3. `lib/commute.ts → getCommutes(office)`: `SELECT zcta, centroid FROM areas`; `SELECT … FROM commute_cache WHERE office_key = $1` (office rounded to 3 decimals). On a miss, `orsMatrixClient` → **ORS `POST /v2/matrix/driving-car`** (208 area sources → 1 office destination, `buildMatrixRequest()` / `parseMatrixResponse()`) → one `UNNEST` insert into `commute_cache` (D024, D028).
-   4. `lib/scoring/loadInputs.ts → loadAreaInputs()`: `areas` (+ latest `crime_aggregates.rate_per_1000`, empty until M4) and all `area_metrics` → `groupMetrics()` → `evaluateRisks()` → `AreaInputs[]`.
+   4. `lib/scoring/loadInputs.ts → loadAreaInputs()`: `areas` LEFT JOIN LATERAL the latest `crime_aggregates` row (`rate_per_1000`, `cities` → `CRIME_SOURCES`) and all `area_metrics` → `groupMetrics()` → `evaluateRisks()` → `AreaInputs[]`.
    5. `lib/scoring/score.ts → scoreAreas(areas, user)` (pure, D026): validate → derive budget → hard filters → sub-scores (`affordabilitySubScore`, `commuteSubScore`, `safetySubScore`, `risksSubScore`) → `normalizeWeights()` over available sub-scores → weighted average → sort: areas with verified rent first, then score, then ZIP (D030).
    6. → JSON `{ office, commuteFromCache, timingMs, monthlyIncomeUsd, budgetUsd, budgetDerived, ranked[], filtered[], unavailableEverywhere }`. Errors: 400 bad input, 422 bad address, 502 upstream failure.
 4. Back in `Explorer`: `setResult()` → `scores` (zcta → score) via `useMemo` → `<AreaMap scores>` writes each score into feature-state and switches `areas-fill` to `lib/scoreScale.ts → scoreFillExpression()`; office marker added; `<TopList>` shows the top 5.
@@ -163,6 +164,11 @@ Shared helpers:
 | `pipeline/settle_pipeline/fbi.py` | Pure FBI helpers: area → agency, 12-month summary of an API response |
 | `pipeline/settle_pipeline/fetch_fbi.py` | FBI CDE API fetch (agencies + summarized counts), cached |
 | `pipeline/settle_pipeline/load_fbi.py` | Loads FBI city-level rates into `area_metrics` |
+| `pipeline/settle_pipeline/jev.py` | Jev request/response helpers and retrying POST |
+| `pipeline/settle_pipeline/claude_classify.py` | Claude fallback classifier (structured output) and client with optional workspace header |
+| `pipeline/settle_pipeline/classify_crime.py` | Classifies all crime labels: Jev first, Claude below 0.7, all cached |
+| `pipeline/settle_pipeline/aggregate_crime.py` | Builds `crime_aggregates` from classified records |
+| `db/init/004_crime_aggregates_sources.sql` | Source and coverage columns on `crime_aggregates` |
 | `vitest.config.ts` | TS test config (`*.test.ts`, `@/` alias) |
 | `pipeline/pyproject.toml` | Python deps and pytest config |
 | `decisions.md` | Decision log |
