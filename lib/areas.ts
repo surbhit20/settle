@@ -6,15 +6,17 @@ export type AreaRow = {
   name: string | null;
   county: string;
   population: number | null;
+  rent_usd: number | null;
   geometry: string;
 };
 
-// The properties every map feature carries. `null` population means "unknown", never zero.
+// The properties every map feature carries. `null` means "unknown", never zero.
 export type AreaProperties = {
   zcta: string;
   name: string | null;
   county: string;
   population: number | null;
+  rent_usd: number | null; // Zillow ZORI, latest month; drives the rent choropleth
 };
 
 // Minimal GeoJSON types (enough for MapLibre). Defined here to avoid an extra dependency.
@@ -31,10 +33,13 @@ export type FeatureCollection = { type: "FeatureCollection"; features: Feature[]
 export const SIMPLIFY_TOLERANCE_DEG = 0.0003;
 
 const AREAS_SQL = `
-  SELECT zcta, name, county, population,
-         ST_AsGeoJSON(ST_SimplifyPreserveTopology(geometry, $1), 5) AS geometry
-  FROM areas
-  ORDER BY zcta
+  SELECT a.zcta, a.name, a.county, a.population,
+         rent.value AS rent_usd,
+         ST_AsGeoJSON(ST_SimplifyPreserveTopology(a.geometry, $1), 5) AS geometry
+  FROM areas a
+  LEFT JOIN area_metrics rent
+    ON rent.zcta = a.zcta AND rent.metric_name = 'rent_zori_usd' AND rent.status = 'ok'
+  ORDER BY a.zcta
 `;
 
 // Pure function (no database), so it is easy to unit test.
@@ -49,6 +54,7 @@ export function toFeatureCollection(rows: AreaRow[]): FeatureCollection {
         name: row.name,
         county: row.county,
         population: row.population,
+        rent_usd: row.rent_usd,
       },
       geometry: JSON.parse(row.geometry),
     })),

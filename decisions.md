@@ -132,3 +132,67 @@ Context: `api.census.gov` now redirects keyless requests to a "Missing Key" page
 Decision: Add `CENSUS_API_KEY` to `.env.example`. `fetch_census.py` calls ACS 5-year **2024** (2020–2024 estimates), variable `B01003_001E`, for all ZCTAs in one request, cached to `data/raw/census/acs5_2024_B01003_zcta.json`. `load_areas.py` still runs without that file and loads population as NULL with a warning, so the map works meanwhile. ACS "no estimate" sentinels (negative values) become NULL, never zero.
 Alternatives considered: 2020 decennial block group counts (keyless, but older and approximate).
 Consequences: Re-run `fetch_census` then `load_areas` once the key is in `.env.local`.
+
+## D016: Mireye hidden-risk fetch: 14 fields at population-weighted centroids
+Date: 2026.10.18
+Status: accepted
+Context: M2 needs hidden-risk data per area. Mireye is a paid API (free plan: 5,000 credits/month, 20 requests/min, 1 credit per field per location).
+Decision:
+- Confirmed all 14 candidate fields from CLAUDE.md section 4 against the free catalog (`GET /v1/meta/fields`, v0.16.0): all exist, all `stable`, 1 credit each, none in a metered (parcel) group.
+- Priced with Mireye's own unmetered `POST /v1/fetch/quote`: **2,912 credits** (208 areas × 14 fields). Owner approved this amount on 2026.10.18.
+- `fetch_mireye.py` sends 9 `POST /v1/fetch/batch` requests (25 locations max, sorted by zcta), 3.5 s apart. It refuses to run without `--confirm`, aborts if the quote exceeds the remaining allowance, sends a deterministic `Idempotency-Key` (sha256 of the body) so retries are free, and caches each raw response to `data/raw/mireye/batches/` before parsing.
+- Mireye doesn't bill `failed` values (the first batch cost 346, not 350). `--retry-failed` re-requests only those, grouped by field list (10 road-distance timeouts → 10 credits, saved under `data/raw/mireye/retries/`).
+- **Actual spend: 2,912 credits** (2,902 for batches + 10 for retries). 2,086 of 5,000 remain for October 2026.
+- Field status semantics kept as Mireye defines them: `absent` is a real answer (e.g. "no RMP-registered facility within 10 km"), not missing data; `failed` is missing data.
+- `source` is stored as `Mireye / <upstream>` (e.g. `Mireye / FEMA_NFHL`), and `source_url` is the upstream agency's page from Mireye's response.
+Alternatives considered: Only the 10 risk fields (2,080 credits): owner chose all 14, since values are valid for about a year and the extras show on the card. `POST /v1/runs` (async jobs): unnecessary for 9 requests.
+Consequences: Point values describe the population-weighted centroid, not every address in the area (the card says so). Re-running costs nothing while the cache exists; **back up `data/raw/mireye/`**, as it isn't in git (D006).
+
+## D017: `area_metrics.confidence` becomes text; add `notes` and `dataset_vintage`
+Date: 2026.10.18
+Status: accepted (amends D003)
+Context: Mireye returns `confidence` as a label (`high` / `medium` / `unknown`), not a number, plus a per-value note and a dataset vintage that explain the value (e.g. "ASCE 7-22", "no RMP-registered facility within 10 km").
+Decision: `db/init/002_area_metrics_text_confidence.sql`: `confidence TEXT`, new `notes TEXT` and `dataset_vintage TEXT`. Applied by hand to the existing dev DB; runs automatically on a fresh volume.
+Alternatives considered: Map labels to numbers (invents precision Mireye doesn't claim).
+Consequences: Introduces the first numbered migration-style file under `db/init/`. Still no migration tool (D002).
+
+## D018: Zillow rent (ZORI) and home value (ZHVI) by ZIP
+Date: 2026.10.18
+Status: accepted
+Context: The brief asks for Zillow Research public CSVs with a 3-year trend. Zillow's API isn't available to individuals.
+Decision:
+- Rent: `Zip_zori_uc_sfrcondomfr_sm_month.csv` (ZORI, all home types, smoothed). Home value: `Zip_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv` (ZHVI, middle tier, smoothed and seasonally adjusted). Both monthly by ZIP, latest month 2026-09.
+- Join Zillow's ZIP (`RegionName`, zero-padded) to our ZCTA code. They match for residential areas; PO-box-only ZIPs have no ZCTA and are simply unused.
+- Latest value = newest non-null month within the file's last 3 months; older counts as no data. 3-year change = latest vs the value 36 months before that same month.
+- Metrics: `rent_zori_usd`, `rent_zori_usd_3yr_change_pct`, `home_value_zhvi_usd`, `home_value_zhvi_usd_3yr_change_pct`. Source "Zillow Research (ZORI/ZHVI)", link `https://www.zillow.com/research/data/`, vintage e.g. "ZORI 2026-09".
+- Coverage: rent for 169/208 areas (trend for 139); home value for 196/208. Missing rent is mostly low-density areas (Atherton, Alamo, Portola Valley, Sunol) where Zillow publishes no index. These show "No data" and grey on the map, never a fake value.
+Alternatives considered: Rent from Census ACS median gross rent (B25064): full coverage but lagging 2-3 years and including long-tenured below-market leases, so it's a poor guide to asking rent for a newcomer. Possible fallback in M3 for the 39 areas without ZORI; to decide then.
+Consequences: Affordability scoring (M3) must handle 39 areas with no rent. Per CLAUDE.md section 5, they get a reweighted score marked "partial data", not a zero.
+
+## D019: Hidden-risk flags on the card; provisional wildfire threshold; show regional prevalence
+Date: 2026.10.18
+Status: accepted (thresholds provisional until M3)
+Context: The card needs the five flags from CLAUDE.md section 5. After loading the data, two of them turn out to be near-universal in the Bay Area: seismic design category D or above (**208 of 208** areas; Mireye assumes the default site class D) and a high hazard-potential dam within 10 km (**197 of 208**; "High" is a consequence-of-failure class, not a failure probability). Flood zone (14) and hazardous facility within 1 km (12) do discriminate. The brief doesn't define "high wildfire frequency".
+Decision:
+- `lib/risks.ts → evaluateRisks()` implements the five flags exactly as the brief defines them. Thresholds live in `lib/scoring/config.ts → RISK_THRESHOLDS`.
+- Wildfire flag: FEMA NRI tract annualized frequency ≥ **0.003 events/yr** (about 1 in 333 years), roughly the region's 90th percentile; flags 26 areas.
+- Each flag is three-state: flagged / clear / no data. Missing or failed data is never shown as clear. Mireye `absent` for the hazardous facility means "none within 10 km", which counts as clear.
+- The card shows "N of 208 areas flagged" next to each flag (`flagPrevalence()`), so near-universal flags read as regional context rather than a warning about this area.
+Alternatives considered: Dropping the two near-universal flags now (changes the brief; that's a scoring decision for M3). Region-relative percentile thresholds computed at runtime (thresholds would drift with the data; fixed constants are deterministic and testable).
+Consequences: **Open question for M3:** as defined, the seismic and dam penalties would hit nearly every area equally. They'd lower all hidden-risk scores without changing the ranking. Options: replace "category D+" with a PGA-based threshold (range 0.54–1.33 g), or weight dam risk by distance. Decide with the owner in M3.
+
+## D020: Rent choropleth with fixed $500 bands
+Date: 2026.10.18
+Status: accepted
+Context: M2 asks for a basic choropleth by rent.
+Decision: Six fixed bands (under $2,500; $2,500 to $3,000; …; $4,000 to $5,000; $5,000 and up; bounds in `lib/scoring/config.ts → RENT_BANDS_USD`), ColorBrewer OrRd, grey for no data. One module (`lib/rentScale.ts`) produces both the MapLibre `step` expression and the legend, so they can't disagree. Band edges belong to the upper band, matching MapLibre `step`.
+Alternatives considered: Quantile bands (legend numbers change whenever data refreshes); a continuous gradient (harder to read exact ranges).
+Consequences: Areas range $2,216 to $8,082 (median ~$3,540), so the bands spread the middle of the distribution well. Revisit if rents shift a lot.
+
+## D021: Area detail endpoint computes flags server-side, loading all metrics per request
+Date: 2026.10.18
+Status: accepted
+Context: The card needs one area's metrics plus region-wide flag counts.
+Decision: `GET /api/areas/[zcta]` loads all ~3,750 `area_metrics` rows, groups them per area, and runs `evaluateRisks` for the selected area and `flagPrevalence` over all of them. Hover uses only `rent_usd`, which is already on the map features from `/api/areas`.
+Alternatives considered: A precomputed prevalence table (another pipeline step to keep in sync); computing in the browser (ships all metrics to every visitor).
+Consequences: A few milliseconds per click locally. If it gets slow, cache prevalence in memory, since it only changes when the pipeline runs.

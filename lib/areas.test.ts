@@ -9,6 +9,7 @@ describe("toFeatureCollection", () => {
         name: "San Francisco",
         county: "San Francisco",
         population: 70000,
+        rent_usd: 4931,
         geometry: '{"type":"MultiPolygon","coordinates":[[[[0,0],[1,0],[1,1],[0,0]]]]}',
       },
     ]);
@@ -20,6 +21,7 @@ describe("toFeatureCollection", () => {
       name: "San Francisco",
       county: "San Francisco",
       population: 70000,
+      rent_usd: 4931,
     });
     expect(fc.features[0].geometry).toEqual({
       type: "MultiPolygon",
@@ -27,11 +29,12 @@ describe("toFeatureCollection", () => {
     });
   });
 
-  it("keeps unknown population as null, not zero", () => {
+  it("keeps unknown population and rent as null, not zero", () => {
     const fc = toFeatureCollection([
-      { zcta: "94128", name: null, county: "San Mateo", population: null, geometry: '{"type":"Point","coordinates":[0,0]}' },
+      { zcta: "94128", name: null, county: "San Mateo", population: null, rent_usd: null, geometry: '{"type":"Point","coordinates":[0,0]}' },
     ]);
     expect(fc.features[0].properties.population).toBeNull();
+    expect(fc.features[0].properties.rent_usd).toBeNull();
   });
 
   it("handles an empty table", () => {
