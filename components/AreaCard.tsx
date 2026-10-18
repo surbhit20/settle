@@ -12,6 +12,18 @@ const usd = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 const pct = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
 const dist = (m: number) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
 
+// Pulls "N of 12 months reported" and the California average out of the FBI note written by
+// pipeline/settle_pipeline/load_fbi.py, e.g. ", 6 of 12 months reported (annualized); California 3.4 per 1,000".
+function fbiContext(notes: string | null): string {
+  if (!notes) return "";
+  const months = notes.match(/(\d+) of 12 months reported/);
+  const ca = notes.match(/California: ([\d.]+) per 1,000/);
+  const parts: string[] = [];
+  if (months && months[1] !== "12") parts.push(`${months[1]} of 12 months reported (annualized)`);
+  if (ca) parts.push(`California average ${ca[1]} violent per 1,000`);
+  return parts.length ? `; ${parts.join("; ")}` : "";
+}
+
 // One labelled number with its source link. `format` turns the raw value into text.
 function MetricRow({ label, metric, format }: { label: string; metric?: Metric; format: (m: Metric) => string }) {
   const hasData = metric?.status === "ok";
@@ -145,6 +157,20 @@ export default function AreaCard({
           <RiskRow key={r.key} risk={r} {...details.prevalence[r.key]} />
         ))}
       </ul>
+
+      {/* FBI city-level crime: context only, never part of the score (decisions.md D033). */}
+      <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">City-wide crime (FBI)</h3>
+      <dl>
+        <MetricRow label="Violent crime" metric={m.fbi_violent_per_1000} format={(x) => `${x.value!.toFixed(1)} per 1,000`} />
+        <MetricRow label="Property crime" metric={m.fbi_property_per_1000} format={(x) => `${x.value!.toFixed(1)} per 1,000`} />
+      </dl>
+      {m.fbi_violent_per_1000?.value_text && (
+        <p className="text-xs text-zinc-500">
+          Whole-jurisdiction figures for {m.fbi_violent_per_1000.value_text}, July 2025 to June 2026
+          {/* notes carry months reported and the California average; extract both for the reader */}
+          {fbiContext(m.fbi_violent_per_1000.notes)}. Shown for context only: not used in your score.
+        </p>
+      )}
 
       <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">More about the area</h3>
       <dl>

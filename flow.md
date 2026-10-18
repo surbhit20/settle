@@ -31,8 +31,10 @@ Scripts live in `pipeline/settle_pipeline/`. Run each with `uv run --project pip
 | 7 | `fetch_crime` | data.sf.gov (`wg3w-h783`), data.oaklandca.gov (`ppgh-7dqv`), data.sanjoseca.gov (quarterly calls CSVs) | `data/raw/crime/{sf,oakland}/page_*.json`, `data/raw/crime/sanjose/calls_*.csv` for 2025-07 to 2026-06. Skips cached files. |
 | 8 | `geocode_sanjose` | San Jose calls; US Census batch geocoder (free) | `data/raw/crime/sanjose/geocode/pass*_batch*_{in,out}.csv`, `street_to_latlng.json` |
 | 9 | `prepare_crime` | steps 7–8 output, `areas` | `data/processed/crime_records.csv.gz` (normalized records with `zcta`), `crime_labels.json` (1,582 labels to classify) |
-| 10 | *(planned, M4: needs Jev details)* classify labels | `crime_labels.json`, Jev | cached classifications |
-| 11 | *(planned, M4)* aggregate crime | records + classifications, `areas`, Census places + block groups | `crime_aggregates` |
+| 10 | `fetch_fbi` | `areas` (name, county); FBI CDE API (`FBI_API_KEY`) | `data/raw/fbi/agencies_CA.json`, `summarized_<ORI>_<offense>_07-2025_06-2026.json` (62 agencies × 2) |
+| 11 | `load_fbi` | `data/raw/fbi/` only | `area_metrics`: `fbi_violent_per_1000`, `fbi_property_per_1000` for all 208 areas (card context, not scored) |
+| 12 | *(planned, M4: needs Jev details)* classify labels | `crime_labels.json`, Jev | cached classifications |
+| 13 | *(planned, M4)* aggregate crime | records + classifications, `areas`, Census places + block groups | `crime_aggregates` |
 
 Steps 3–4 and 5–6 are independent of each other; both need step 2 first.
 
@@ -40,6 +42,7 @@ Steps 3–4 and 5–6 are independent of each other; both need step 2 first.
 - `fetch_crime`: Socrata `$select/$where/$order/$limit/$offset` paging (50,000 rows per page) for SF and Oakland; CKAN resource CSV downloads for San Jose.
 - `geocode_sanjose`: `sanjose.select_incidents()` (dedupe `EID`, keep report/arrest/citation) → `block_candidates()` per address → up to 3 Census batch passes over still-unmatched addresses → `ADDRESS → [lat, lng] | null`.
 - `prepare_crime`: `crime.normalize_sf/normalize_oakland/normalize_sanjose()` → one table (`city, incident_key, occurred_at, label, lat, lng`) → `placement_rates()` → geopandas `sjoin` of points within `areas` geometries (read with `ST_AsBinary`) → `zcta`.
+- `fetch_fbi` / `load_fbi` (D033): `fbi.agency_for_area()` maps each area to its city police department or county sheriff → one `/summarized/agency/{ori}/{offense}` call per agency and offense (1.1 s apart, cached) → `fbi.summarize()` (12-month total, annualized if months are missing, ÷ agency population × 1,000; California average from the same response) → `metrics.upsert_metrics()`.
 - *(planned)* aggregate: `crime_aggregate.city_coverage()` (residents inside covered cities) → `incidents_by_class()` (most severe class per incident) → `aggregate()` (counts, scaled violent+property per 1,000 covered residents, `null` below 50% coverage or 1,000 residents) → `crime_aggregates`.
 
 ### `load_areas` in detail (`load_areas.py → areas.py`)
@@ -92,7 +95,7 @@ Shared helpers:
 ### 3c. Selecting an area
 1. Map click or top-5 click → `Explorer.setSelectedZcta()` → `AreaMap` sets the `selected` feature-state (thick outline).
 2. Sidebar shows `<AreaCard key={zcta} scoreSection={<ScoreBreakdown …/>}>`. `ScoreBreakdown` (from the scoring result, no extra request) shows score, rank, partial label, each sub-score with weight, explanation and source links, or the filter reason.
-3. `AreaCard` fetches `GET /api/areas/[zcta]` → `app/api/areas/[zcta]/route.ts` → `lib/areaDetails.ts → getAreaDetails()` → housing, five hidden-risk flags with "N of 208 flagged", extras, all with `<SourceLink>` (D019, D021, D023).
+3. `AreaCard` fetches `GET /api/areas/[zcta]` → `app/api/areas/[zcta]/route.ts` → `lib/areaDetails.ts → getAreaDetails()` → housing, five hidden-risk flags with "N of 208 flagged", "City-wide crime (FBI)" (context only, D033), extras, all with `<SourceLink>` (D019, D021, D023, D033).
 
 ### 3d. Health
 `GET /api/health` → `app/api/health/route.ts` → `SELECT PostGIS_Version()` → `{ ok, postgis }` (200) or `{ ok: false, error }` (503).
@@ -157,6 +160,9 @@ Shared helpers:
 | `pipeline/settle_pipeline/crime.py` | Pure normalization of the three cities into one record table; placement rates |
 | `pipeline/settle_pipeline/prepare_crime.py` | Builds normalized records with ZCTAs and the label list for Jev |
 | `pipeline/settle_pipeline/crime_aggregate.py` | Pure coverage, per-incident severity, and rate aggregation |
+| `pipeline/settle_pipeline/fbi.py` | Pure FBI helpers: area → agency, 12-month summary of an API response |
+| `pipeline/settle_pipeline/fetch_fbi.py` | FBI CDE API fetch (agencies + summarized counts), cached |
+| `pipeline/settle_pipeline/load_fbi.py` | Loads FBI city-level rates into `area_metrics` |
 | `vitest.config.ts` | TS test config (`*.test.ts`, `@/` alias) |
 | `pipeline/pyproject.toml` | Python deps and pytest config |
 | `decisions.md` | Decision log |
