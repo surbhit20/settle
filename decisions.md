@@ -196,3 +196,11 @@ Context: The card needs one area's metrics plus region-wide flag counts.
 Decision: `GET /api/areas/[zcta]` loads all ~3,750 `area_metrics` rows, groups them per area, and runs `evaluateRisks` for the selected area and `flagPrevalence` over all of them. Hover uses only `rent_usd`, which is already on the map features from `/api/areas`.
 Alternatives considered: A precomputed prevalence table (another pipeline step to keep in sync); computing in the browser (ships all metrics to every visitor).
 Consequences: A few milliseconds per click locally. If it gets slow, cache prevalence in memory, since it only changes when the pipeline runs.
+
+## D022: Drop the `JEV_API_URL` environment variable
+Date: 2026.10.18
+Status: accepted
+Context: CLAUDE.md section 8 listed both `JEV_API_KEY` and `JEV_API_URL`. The owner decided the URL variable isn't needed.
+Decision: Remove `JEV_API_URL` from `.env.example`, `.env.local` and CLAUDE.md section 8. When Jev is integrated (M4/M5), its endpoint becomes a named constant in the Jev client module, taken from TypeSafe AI's docs. Only the key stays in the environment, because only the key is secret. Also added `CENSUS_API_KEY` to the CLAUDE.md list (introduced in D015) so the brief matches `.env.example`.
+Alternatives considered: Keeping the variable for switching environments (e.g. a staging endpoint): no such need yet; easy to reintroduce.
+Consequences: The Jev endpoint, request/response format and confidence field are still unknown and must come from the owner before M4 (CLAUDE.md section 3).

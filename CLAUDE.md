@@ -140,9 +140,9 @@ Jev is also used in the pipeline to classify raw crime incident descriptions int
 ```
 DATABASE_URL=
 MIREYE_API_TOKEN=
+CENSUS_API_KEY=
 ORS_API_KEY=
 JEV_API_KEY=
-JEV_API_URL=
 ANTHROPIC_API_KEY=
 RENTCAST_API_KEY=
 ```
