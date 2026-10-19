@@ -9,7 +9,7 @@ import os
 
 import anthropic
 
-CLAUDE_MODEL = "claude-opus-5-5"
+CLAUDE_MODEL = "claude-sonnet-5-5"  # D050
 
 SYSTEM = (
     "You classify US police record labels for a neighborhood safety comparison. "
@@ -51,7 +51,7 @@ def classify_with_claude(client: anthropic.Anthropic, city_name: str, record_kin
         # request on a fallback model it picks by refusal category, inside the same call.
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
-        # Short classification: low effort is plenty (thinking can't be turned off on this model).
+        # Short classification: low effort is plenty (Sonnet 5.5's default is high).
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
         system=SYSTEM,
         messages=[{"role": "user", "content": f"{city_name} police {record_kind}: {label}"}],

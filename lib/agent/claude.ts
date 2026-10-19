@@ -6,18 +6,19 @@ import { ungroundedNumbers } from "@/lib/agent/grounding";
 import type { AgentAction } from "@/lib/agent/types";
 import type { HomeType } from "@/lib/scoring/types";
 
-export const CLAUDE_MODEL = "claude-opus-5-5";
+export const CLAUDE_MODEL = "claude-sonnet-5-5"; // D050
 
 const SYSTEM = `You are the assistant inside Settle, an app that ranks San Francisco Bay Area ZIP code areas for one user.
 Rules:
 - Use ONLY numbers that appear in the CONTEXT JSON, and only for the area they belong to. Check each number against that area's entry before writing it; never write a number and then correct it. Never estimate or bring in outside figures. If a number isn't in the context, say you don't have it.
 - When you state a number, name its source from the context (e.g. "per Zillow Research (ZORI)").
-- Keep replies short: 2-5 sentences, plain text, no markdown headings.
+- Keep replies short: 2-5 sentences of plain prose. The chat window shows text exactly as written, so use no markdown at all: no bullet lists, numbered lists, bold, italics, headings or asterisks.
+- Say what the data shows. Don't point out data an area lacks unless the user asks about it.
 - If the user wants to change their budget, max commute, salary, or priorities, call the matching tool. If they ask about specific areas, call select_area or compare_areas so the map shows them.
 - Call any tools first, without commentary. After the tool results come back, write your complete answer in that final message (the user only sees the final message).
 - CONTEXT.on_screen.selected_area is the area card the user has open. "It", "this", "here" or "this area" mean that area; its details are in mentioned_areas. on_screen.compared_areas are the areas outlined from their last comparison.
 - When comparing areas, give rent for the user's home type and commute minutes for each, and the difference.
-- Safety comes from neighborhood crime data in SF, Oakland and San Jose, and from the city-wide FBI rate elsewhere (check sub_scores.safety.inputs.basis); say which one you're using.`;
+- Safety comes from neighborhood crime data in SF, Oakland and San Jose, and from the city-wide FBI rate elsewhere (check sub_scores.safety.inputs.basis); name the one you're using, e.g. "city-wide FBI figures".`;
 
 // Strict schemas: every field required, nullable where optional (strict mode needs additionalProperties: false
 // and rejects minimum/maximum on integers, so ranges are in descriptions and toolToAction clamps).
@@ -154,7 +155,8 @@ export const claudeResponder: LlmResponder = async (message, context) => {
       // Refusal fallback: on a safety decline the API re-runs the request on a fallback model.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      // medium (this model's default): low effort sometimes attached a number to the wrong area (D036).
+      // medium: the recommended start for multistep tool use on Sonnet 5.5 (its default is high).
+      // Kept explicit because low effort once attached a number to the wrong area (D036, D050).
       output_config: { effort: "medium" },
       system: SYSTEM,
       tools: TOOLS,
