@@ -2,14 +2,38 @@
 // They turn "what if my budget goes up 300" into an exact change, with no LLM call. When a
 // parser can't find what it needs it returns null, and the router falls back to Claude.
 
-import type { Priorities, SubScoreKey } from "@/lib/scoring/types";
+import type { CommuteMode, HomeType, Priorities, SubScoreKey } from "@/lib/scoring/types";
 import { SCORING } from "@/lib/scoring/config";
 
 export type FilterChanges = {
   salaryUsd?: number;
   maxCommuteMin?: number;
   rentBudgetUsd?: number;
+  homeType?: HomeType;
+  commuteMode?: CommuteMode;
 };
+
+// "by train", "public transit", "take BART", "bus" -> transit; "if I drive", "by car" -> drive.
+// Returns null if the message doesn't say how the user would get to work.
+export function parseCommuteMode(message: string): CommuteMode | null {
+  const m = message.toLowerCase();
+  if (/\b(public transit|public transport\w*|transit|by (?:train|bus|bart|caltrain|muni|light rail)|take (?:the )?(?:train|bus|bart|caltrain|muni|light rail)|bart|caltrain|muni|vta)\b/.test(m)) return "transit";
+  if (/\b(by car|if i drive|i'?ll drive|drive instead|driving instead|switch to driv\w*|go back to driv\w*)\b/.test(m)) return "drive";
+  return null;
+}
+
+// "studio", "a 2 bedroom", "2br", "3 bhk", "two-bed", "a room with roommates" -> HomeType.
+// "any size" goes back to Zillow's typical home. Returns null if no size is mentioned.
+const WORD_NUM: Record<string, string> = { one: "1", two: "2", three: "3", four: "4" };
+export function parseHomeType(message: string): HomeType | null {
+  const m = message.toLowerCase();
+  if (/\b(any size|any home|typical home|doesn'?t matter what size)\b/.test(m)) return "any";
+  if (/\b(shared|roommates?|room ?mates?|a room in|single room|share a (?:place|house|flat|apartment))\b/.test(m)) return "shared";
+  if (/\b(studios?|0 ?br|0[ -]?bed(room)?s?)\b/.test(m)) return "studio";
+  const b = m.match(/\b([1-4]|one|two|three|four)[ -]?(?:br|bd|bhk|bed(?:room)?s?|bedroom)\b/);
+  if (b) return `${WORD_NUM[b[1]] ?? b[1]}br` as HomeType;
+  return null;
+}
 
 // Current values the parser needs to apply relative changes ("up 300").
 export type FilterBaseline = { salaryUsd: number; maxCommuteMin: number; budgetUsd: number };
@@ -72,8 +96,16 @@ function parseTopic(msg: string, topic: string, current: number): number | null 
 }
 
 export function parseFilterChange(message: string, base: FilterBaseline): FilterChanges | null {
-  const msg = message.replace(/minutes?|mins?\b/gi, "").replace(/\s+/g, " ");
+  const homeType = parseHomeType(message);
+  // Strip home-size phrases first so "2 bedroom" isn't read as a number for another filter.
+  const msg = message
+    .replace(/\b([0-9]|one|two|three|four)[ -]?(?:br|bd|bhk|bed(?:room)?s?|bedroom)\b/gi, " ")
+    .replace(/minutes?|mins?\b/gi, "")
+    .replace(/\s+/g, " ");
   const changes: FilterChanges = {};
+  if (homeType) changes.homeType = homeType;
+  const commuteMode = parseCommuteMode(message);
+  if (commuteMode) changes.commuteMode = commuteMode;
 
   const budget = parseTopic(msg, TOPICS.rentBudgetUsd, base.budgetUsd);
   if (budget !== null && budget > 0) changes.rentBudgetUsd = Math.round(budget);

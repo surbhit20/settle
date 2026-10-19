@@ -2,7 +2,7 @@
 
 Settle answers one question for someone moving to the San Francisco Bay Area: **given my salary, my office, and what I care about, which neighborhoods should I live in?**
 
-You enter a salary, an office address, a maximum commute and your priorities. Settle ranks the 208 ZIP code areas in San Francisco, San Mateo, Santa Clara, Alameda and Contra Costa counties, colors them on a map, and explains every score with numbers linked to their sources. A chat box handles "what if" questions and updates the map live.
+You enter a salary, an office address, a maximum commute, the home size you want (a room in a shared home, a studio, or 1-4 bedrooms) and your priorities. Settle ranks the 208 ZIP code areas in San Francisco, San Mateo, Santa Clara, Alameda and Contra Costa counties, colors them on a map, and explains every score with numbers linked to their sources. A chat box handles "what if" questions and updates the map live.
 
 ![Results: heat map, top 5 and chat](docs/screenshots/2-results-heat-map.jpg)
 
@@ -17,9 +17,9 @@ You enter a salary, an office address, a maximum commute and your priorities. Se
 ## How it works
 
 - **Scoring is deterministic** (`lib/scoring/score.ts`, unit tested). Areas over your max commute, or more than 15% over your rent budget, are filtered out. The rest get four sub-scores from 0 to 100:
-  - **Affordability:** rent as a share of income.
-  - **Commute:** drive time against your max.
-  - **Safety:** crime rate percentile.
+  - **Affordability:** rent for your home size as a share of income.
+  - **Commute:** drive time (no traffic) or typical weekday-morning public-transit time, whichever you choose, against your max.
+  - **Safety:** crime rate percentile (neighborhood data in SF, Oakland and San Jose; the city's FBI rate elsewhere, on its own scale).
   - **Hidden risks:** flood, wildfire, earthquake, dam, hazardous facility.
 
   These are combined with your priority weights. Missing data is never counted as zero: the weights are spread over what's available, and the area is labeled "partial data". Every threshold lives in `lib/scoring/config.ts`.
@@ -33,13 +33,13 @@ Design decisions, with the reasoning and alternatives for each, are in [`decisio
 All sources, with links and licenses, are listed in the app at `/sources` ([`app/sources/page.tsx`](app/sources/page.tsx)). In short:
 
 - **Areas and population:** US Census 2020 ZCTAs, places, block group centers of population; ACS 5-year 2020–2024.
-- **Rent and home values:** Zillow Research (ZORI, ZHVI).
+- **Rent and home values:** Zillow Research (ZORI typical rent, ZHVI); HUD Small Area Fair Market Rents FY2027 for rent by home size (a shared room is estimated as a third of a 3-bedroom).
 - **Hidden risks:** FEMA, USGS, USACE, EPA, FCC, NOAA, FAA and Overture data, via the [Mireye](https://api.mireye.com) API.
-- **Safety:** police data from San Francisco (DataSF), Oakland and San Jose for Jul 2025 to Jun 2026, classified violent / property / minor by Jev, with Claude re-checking uncertain labels. FBI Crime Data Explorer city-wide rates appear on cards for context only.
-- **Commute:** openrouteservice drive times (no traffic). **Basemap:** OpenFreeMap, © OpenStreetMap contributors.
+- **Safety:** police data from San Francisco (DataSF), Oakland and San Jose for Jul 2025 to Jun 2026, classified violent / property / minor by Jev, with Claude re-checking uncertain labels. Elsewhere, FBI Crime Data Explorer city-wide rates provide a labeled "city-wide" safety score.
+- **Commute:** openrouteservice drive times (no traffic); public-transit times precomputed with r5py from 511.org regional timetables (data provided by 511.org) and OpenStreetMap. **Basemap:** OpenFreeMap, © OpenStreetMap contributors.
 
 **Caveats:**
-- Only San Francisco, Oakland and San Jose publish neighborhood crime data (69 of 208 areas).
+- Only San Francisco, Oakland and San Jose publish neighborhood crime data (69 of 208 areas); other areas use a coarser city-wide FBI rate.
 - Commute times assume no traffic.
 - Risk values are measured at each area's population-weighted center, not at every address.
 
@@ -66,6 +66,7 @@ Keys (all in `.env.local`, never committed):
 | `JEV_API_KEY` | crime classification, chat routing | |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | Claude fallback | workspace ID only if the key isn't workspace-scoped |
 | `RENTCAST_API_KEY` | v2 only (listings) | 50 requests/month; unused in v1 |
+| `TRANSIT_511_API_KEY` | public-transit timetables (pipeline only) | free at 511.org/open-data/token |
 
 ### Build the data (run once, in order)
 
@@ -75,11 +76,14 @@ Each step caches raw downloads and API responses in `data/raw/` (git-ignored), s
 P="uv run --project pipeline python -m settle_pipeline"
 $P.fetch_census && $P.load_areas            # 208 areas, population, centroids, names
 $P.fetch_zillow && $P.load_zillow           # rent and home values
+$P.load_hud                                 # rent by home size (HUD SAFMR FY2027)
 $P.fetch_mireye                             # dry run: prints the credit quote
 $P.fetch_mireye --confirm && $P.load_mireye # paid: ~2,900 credits
 $P.fetch_crime && $P.geocode_sanjose && $P.prepare_crime
 $P.classify_crime && $P.aggregate_crime     # Jev (+ Claude for low confidence), then rates
 $P.fetch_fbi && $P.load_fbi                 # FBI city-level context
+$P.fetch_transit                           # 511 timetables + OSM (needs osmium-tool)
+$P.compute_transit && $P.load_transit      # transit times (needs Java 21; several minutes)
 ```
 
 Then start the app:

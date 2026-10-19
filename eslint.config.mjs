@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Vendored MapLibre worker copied from node_modules (scripts/copy-maplibre-worker.mjs).
     "public/maplibre/**",
+    // The Python pipeline's virtualenv (some packages ship JavaScript).
+    "pipeline/.venv/**",
   ]),
 ]);
 

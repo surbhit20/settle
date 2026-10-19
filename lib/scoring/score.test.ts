@@ -266,3 +266,103 @@ describe("explanations match the rounded inputs", () => {
     expect(r.subScores.affordability.explanation).toContain(`${Number(r.subScores.affordability.inputs.rent_share_pct).toFixed(1)}%`);
   });
 });
+
+describe("home type (D038)", () => {
+  const sized = (zcta: string, twoBr: number | null, over: Partial<AreaInputs> = {}) =>
+    area(zcta, {
+      rentUsd: 3000,
+      rentsBySize: {
+        "2br": { usd: twoBr, source: { name: "HUD Small Area Fair Market Rents (FY2027)", url: "https://hud" } },
+        shared: { usd: 1400, source: { name: "HUD Small Area Fair Market Rents (FY2027)", url: "https://hud" } },
+      },
+      ...over,
+    });
+
+  it("defaults to 'any' and uses Zillow's typical rent", () => {
+    const r = scoreAreas([sized("1", 4000)], user);
+    expect(r.homeType).toBe("any");
+    expect(r.ranked[0].subScores.affordability.inputs.rent_usd).toBe(3000);
+  });
+
+  it("uses the chosen size's rent and source, and names the size in the explanation", () => {
+    const a = scoreAreas([sized("1", 4000)], { ...user, homeType: "2br" }).ranked[0];
+    expect(a.subScores.affordability.inputs).toMatchObject({ rent_usd: 4000, home_type: "2br" });
+    expect(a.subScores.affordability.sources[0].name).toContain("HUD");
+    expect(a.subScores.affordability.explanation).toContain("2-bedroom");
+  });
+
+  it("filters on the chosen size's rent, not the typical rent", () => {
+    // budget 4500 -> ceiling 5175: typical rent 3000 passes, but a 6000 2-bedroom doesn't
+    const r = scoreAreas([sized("1", 6000)], { ...user, homeType: "2br" });
+    expect(r.ranked).toHaveLength(0);
+    expect(r.filtered[0].reason).toBe("rent_over_budget");
+    expect(r.filtered[0].detail).toContain("2-bedroom");
+  });
+
+  it("treats a missing size as no data (partial), never falling back to another size", () => {
+    const r = scoreAreas([sized("1", null), sized("2", 3500)], { ...user, homeType: "2br" });
+    const a = r.ranked.find((x) => x.zcta === "1")!;
+    expect(a.subScores.affordability.score).toBeNull();
+    expect(a.partial).toBe(true);
+    expect(r.ranked[0].zcta).toBe("2"); // verified rent first (D030)
+  });
+
+  it("shared room uses its own (estimated) rent", () => {
+    const a = scoreAreas([sized("1", 4000)], { ...user, homeType: "shared" }).ranked[0];
+    expect(a.subScores.affordability.inputs.rent_usd).toBe(1400);
+    expect(a.subScores.affordability.explanation).toContain("room in a shared home");
+  });
+});
+
+describe("areas with few residents (D038)", () => {
+  it("are filtered out with the resident count, before other filters", () => {
+    const r = scoreAreas([area("94188", { population: 0 }), area("94104", { population: 498, commuteMin: 999 }), area("94110", { population: 60000 })], user);
+    expect(r.ranked.map((a) => a.zcta)).toEqual(["94110"]);
+    const byZ = Object.fromEntries(r.filtered.map((f) => [f.zcta, f]));
+    expect(byZ["94188"].reason).toBe("few_residents");
+    expect(byZ["94104"].reason).toBe("few_residents");
+    expect(byZ["94104"].detail).toContain("498 residents");
+  });
+
+  it("unknown population doesn't filter (missing data isn't a fact)", () => {
+    expect(scoreAreas([area("1", { population: null })], user).ranked).toHaveLength(1);
+  });
+});
+
+describe("FBI city-wide safety fallback (D040)", () => {
+  const fbiSrc = { name: "FBI Crime Data Explorer: Berkeley Police Department", url: "https://cde" };
+  const nb = (zcta: string, rate: number) => area(zcta, { crimeRatePer1000: rate });
+  const city = (zcta: string, fbi: number | null, agency = "Berkeley Police Department") =>
+    area(zcta, { crimeRatePer1000: null, fbiRatePer1000: fbi, fbiAgency: agency, fbiSource: fbiSrc });
+
+  it("scores areas without neighborhood data from their city's FBI rate, labeled as city-wide", () => {
+    const r = scoreAreas([nb("sf1", 20), nb("sf2", 60), city("brk", 47.2), city("dan", 4.5, "Danville Police Department")], user);
+    const by = Object.fromEntries(r.ranked.map((a) => [a.zcta, a]));
+    expect(by.dan.subScores.safety.score).toBe(100); // safest of the FBI-scored areas
+    expect(by.brk.subScores.safety.score).toBe(0);
+    expect(by.brk.subScores.safety.inputs).toMatchObject({ basis: "city-wide (FBI)", fbi_rate_per_1000: 47.2 });
+    expect(by.brk.subScores.safety.explanation).toContain("City-wide: Berkeley Police Department reports 47.2");
+    expect(by.brk.subScores.safety.explanation).not.toMatch(/no neighborhood/i);
+    expect(by.brk.subScores.safety.sources[0].name).toContain("FBI");
+    expect(by.brk.partial).toBe(false); // it has a safety score now
+  });
+
+  it("keeps the two scales separate: FBI areas don't change neighborhood scores", () => {
+    const without = scoreAreas([nb("sf1", 20), nb("sf2", 60)], user).ranked;
+    const withFbi = scoreAreas([nb("sf1", 20), nb("sf2", 60), city("brk", 5), city("x", 500)], user).ranked;
+    for (const z of ["sf1", "sf2"]) {
+      expect(withFbi.find((a) => a.zcta === z)!.subScores.safety.score).toBe(without.find((a) => a.zcta === z)!.subScores.safety.score);
+    }
+  });
+
+  it("areas with neither source still have no safety score (never zero)", () => {
+    const a = scoreAreas([nb("sf1", 20), city("brk", 30), city("none", null)], user).ranked.find((x) => x.zcta === "none")!;
+    expect(a.subScores.safety.score).toBeNull();
+    expect(a.partial).toBe(true);
+  });
+
+  it("only FBI data anywhere: safety is still scored, not reported unavailable", () => {
+    const r = scoreAreas([city("a", 10), city("b", 20)], user);
+    expect(r.unavailableEverywhere).not.toContain("safety");
+  });
+});

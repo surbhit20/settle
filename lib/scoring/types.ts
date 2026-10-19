@@ -1,8 +1,17 @@
 import type { RiskFlag } from "@/lib/risks";
+import type { HOME_TYPES } from "@/lib/scoring/config";
+
+// "any" | "shared" | "studio" | "1br" | ... (keyof typeof = the object's key names as a type).
+export type HomeType = keyof typeof HOME_TYPES;
 
 // The four things a user can prioritize. Used as object keys throughout scoring.
 export type SubScoreKey = "affordability" | "commute" | "safety" | "risks";
 export const SUB_SCORE_KEYS: SubScoreKey[] = ["affordability", "commute", "safety", "risks"];
+
+// How the user gets to work (D048). Drive = openrouteservice drive time without traffic;
+// transit = precomputed typical weekday-morning public-transit time.
+export type CommuteMode = "drive" | "transit";
+export const COMMUTE_MODES: CommuteMode[] = ["drive", "transit"];
 
 // Slider values, 0..SCORING.priorityMax each.
 export type Priorities = Record<SubScoreKey, number>;
@@ -12,6 +21,8 @@ export type UserInputs = {
   maxCommuteMin: number;
   rentBudgetUsd: number | null; // monthly; null = derive from salary
   priorities: Priorities;
+  homeType?: HomeType; // defaults to "any"
+  commuteMode?: CommuteMode; // defaults to "drive"
 };
 
 // Where a number came from; shown as a link next to it in the UI.
@@ -22,11 +33,26 @@ export type AreaInputs = {
   zcta: string;
   name: string | null;
   county: string;
-  rentUsd: number | null;
+  rentUsd: number | null; // Zillow typical rent ("any" home type)
   rentSource: SourceRef | null;
-  commuteMin: number | null; // null = no driving route found
+  // Rent per specific home size (HUD SAFMR; "shared" is an estimate). Missing = no data.
+  rentsBySize?: Partial<Record<Exclude<HomeType, "any">, { usd: number | null; source: SourceRef | null }>>;
+  // The commute for the user's chosen mode (what's scored and filtered on); null = no route.
+  commuteMin: number | null;
   commuteSource: SourceRef;
+  // Both modes, for display and the chat. Set by lib/scoring/commuteMode.ts.
+  driveMin?: number | null;
+  driveSource?: SourceRef;
+  transitMin?: number | null;
+  transitEstimated?: boolean; // same-area trip: estimated, not routed
+  transitSource?: SourceRef | null;
   crimeRatePer1000: number | null; // null until M4, or where a city has no open data
+  population?: number | null; // ACS residents; areas under SCORING.minPopulation aren't ranked
+  // City-wide FBI rate (violent + property per 1,000) for the area's police agency: the safety
+  // fallback where there's no neighborhood data (D040).
+  fbiRatePer1000?: number | null;
+  fbiAgency?: string | null;
+  fbiSource?: SourceRef | null;
   crimeSource: SourceRef | null;
   risks: RiskFlag[];
 };
@@ -50,7 +76,7 @@ export type ScoredArea = {
   missing: SubScoreKey[];
 };
 
-export type FilterReason = "no_route" | "commute_too_long" | "rent_over_budget";
+export type FilterReason = "few_residents" | "no_route" | "commute_too_long" | "rent_over_budget";
 
 export type FilteredArea = {
   zcta: string;
@@ -61,6 +87,7 @@ export type FilteredArea = {
 };
 
 export type ScoreResult = {
+  homeType: HomeType;
   monthlyIncomeUsd: number;
   budgetUsd: number;
   budgetDerived: boolean;

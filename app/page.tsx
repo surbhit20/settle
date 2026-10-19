@@ -5,14 +5,13 @@ export default function Home() {
   return (
     // Phones scroll the whole page; from md up the page is exactly one screen tall.
     <main className="flex min-h-dvh flex-col md:h-dvh">
-      <header className="flex items-start justify-between gap-4 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Settle</h1>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Where should you live? Bay Area neighborhoods ranked for your salary, office, and priorities.
-          </p>
-        </div>
-        <Link href="/sources" className="shrink-0 text-sm text-zinc-600 underline dark:text-zinc-400">
+      {/* Three columns: an empty spacer, the centered title, and the link on the right. The equal
+          outer columns (1fr each) keep the title exactly centered. One slim row: the tagline lives
+          under the form's heading instead, so the header stays thin. */}
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-line bg-paper px-5 py-2.5 md:px-8">
+        <div />
+        <h1 className="font-serif text-4xl leading-none tracking-tight">Settle</h1>
+        <Link href="/sources" className="justify-self-end text-sm text-muted transition-colors hover:text-ink">
           Data sources
         </Link>
       </header>

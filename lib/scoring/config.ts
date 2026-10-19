@@ -22,6 +22,9 @@ export const RENT_BANDS_USD = [2500, 3000, 3500, 4000, 5000] as const;
 export const SCORING = {
   // When the user gives no rent budget: budget = this share of gross monthly income (D026).
   derivedBudgetShareOfGross: 0.3,
+  // Hard filter: areas with fewer residents than this aren't ranked (airport, office districts,
+  // campuses, open space). HUD publishes rents even for ZIPs where almost nobody lives (D038).
+  minPopulation: 1000,
   // Hard filter: drop areas whose rent exceeds the budget by more than this (CLAUDE.md: 15%).
   rentOverBudgetTolerance: 0.15,
 
@@ -46,4 +49,17 @@ export const SCORING = {
   // Priority slider range and the "Balanced" default.
   priorityMax: 10,
   defaultPriorities: { affordability: 5, commute: 5, safety: 5, risks: 5 },
+} as const;
+
+// Home sizes the user can pick (decisions.md D038). "any" uses Zillow's typical rent for all
+// homes; the others use HUD Small Area FMRs by bedroom count; "shared" is an estimate
+// (a third of the 3-bedroom rent). `metric` is the area_metrics name holding that rent.
+export const HOME_TYPES = {
+  any: { label: "Any size (typical home)", short: "typical home", metric: "rent_zori_usd" },
+  shared: { label: "Room in a shared home", short: "room in a shared home", metric: "rent_shared_room_est" },
+  studio: { label: "Studio", short: "studio", metric: "rent_hud_0br" },
+  "1br": { label: "1 bedroom", short: "1-bedroom", metric: "rent_hud_1br" },
+  "2br": { label: "2 bedrooms", short: "2-bedroom", metric: "rent_hud_2br" },
+  "3br": { label: "3 bedrooms", short: "3-bedroom", metric: "rent_hud_3br" },
+  "4br": { label: "4 bedrooms", short: "4-bedroom", metric: "rent_hud_4br" },
 } as const;

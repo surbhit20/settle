@@ -7,7 +7,7 @@ export const JEV_URL = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-1.13.0";
 
 const CRITERIA: Record<Intent, string> = {
-  update_filter: "Changes a search filter: rent budget, maximum commute time, or salary (e.g. 'what if my budget goes up 300', 'max commute 30 minutes').",
+  update_filter: "Changes a search filter: rent budget, maximum commute time, salary, home size, or driving vs public transit (e.g. 'what if my budget goes up 300', 'max commute 30 minutes', 'show me 2 bedrooms', 'what if I take the train').",
   set_priority: "Changes how much they care about affordability, commute, safety, or hidden risks (e.g. 'safety matters more to me').",
   compare: "Asks to compare two or more named neighborhoods, cities, or ZIP codes.",
   explain: "Asks why an area is ranked or scored the way it is.",

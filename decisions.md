@@ -388,3 +388,138 @@ Decision:
 - **Secret found and scrubbed before the first push:** the real `FBI_API_KEY` value had been written into `.env.example` and committed in 4 commits (from the FBI commit onward). It was caught by scanning history for the actual `.env.local` values, then removed with `git filter-branch` (tree filter blanking the line). Backup refs, reflog and the stash pointing at the old commits were cleared and garbage-collected; a byte-level scan of history and the object store found none of the 8 keys. Only then was `main` pushed. The key was never on any remote.
 Alternatives considered: A separate mobile view with tabs (more code than the stacked layout needs); keeping the fixed zoom with a mobile-specific value (breaks on other sizes).
 Consequences: Before every commit and push, scan staged content for the real key values, not just filenames. Rotating the FBI key is optional since it never left the machine; it's free if wanted.
+
+## D038: Home size (shared room, studio, 1–4 bedrooms) with HUD rents; areas under 1,000 residents not ranked
+Date: 2026.10.18
+Status: accepted
+Context: The owner asked to let people say what kind of home they want ("somebody might want a shared place, a studio, or a 4 BHK"). Zillow's public rent index (ZORI) is one "typical home" figure per ZIP with no bedroom breakdown (its by-bedroom files are home values, ZHVI, not rents).
+Decision:
+- **Source:** HUD Small Area Fair Market Rents FY2027 (`FY27_safmrs.xlsx`, huduser.gov, public domain, effective 2026-10-01): rent per ZIP for 0–4 bedrooms; all 208 areas covered. Owner chose this over (a) scaling Zillow by HUD's bedroom ratios (our own blend, harder to explain) and (b) Census ACS B25031 (top-coded at $3,500+, so most Bay Area 3–4 bedroom values are stuck there, and 2–3 years old). HUD's site rejects scripted requests without a browser-like User-Agent; `load_hud.py` sends one.
+- **Shared room:** no official figure; estimated as **a third of the 3-bedroom rent** (owner's choice over half a 2-bedroom), stored as `rent_shared_room_est` with the note "Estimate: one third of HUD's 3-bedroom rent" and labeled "(estimate)" on cards.
+- ZIPs that straddle two HUD metro areas (7 of ours, e.g. 94550 Livermore in Modesto and Oakland-Fremont) use the row for the area's county's metro (`COUNTY_HUD_AREA`).
+- **Scoring:** `homeType` input (`any` default = Zillow typical rent; `shared`, `studio`, `1br`…`4br` = HUD). `rentFor()` picks the rent; budget filter and affordability use it; a missing size is no data (partial, ranked after known-rent areas per D030), never another size's rent. Explanations name the size and cite HUD. Labels and metric names in `lib/scoring/config.ts → HOME_TYPES`.
+- **UI and chat:** "Home size" picker on the form; card shows "Rent by home size" with the chosen size in bold; results note states the size. `parseHomeType()` handles "studio(s)", "2 bedroom", "3 bhk", "two-bed", "roommates", "any size"; the fast path replies "home size Any size → 2 bedrooms"; Claude's `update_filter` tool gained a `home_type` enum. Live: all three test phrases took the fast path (Jev confidence 0.8–1.0, 85–314 ms).
+- **Few residents:** HUD publishes rents even for ZIPs almost nobody lives in, which pushed 94188 (0 residents) to #3 and 94104 (498) to #1 for a 2-bedroom. New hard filter `few_residents`: areas with fewer than **1,000** residents (`SCORING.minPopulation`) aren't ranked; their card says how many live there. 13 areas (SFO, Mills College, office districts, rural hills). Unknown population doesn't filter.
+Alternatives considered: RentCast rent-by-bedroom (50 requests/month cap for 208 ZIPs; ruled out by the hard cap); dropping the shared option (owner kept it as a labeled estimate).
+Consequences: HUD rents are the 40th percentile and include utilities, so they can run below current asking rents; the Sources page says so. Switching home size can change which areas pass the budget filter (e.g. 4 bedrooms: 39 areas over budget at $180k vs 9 for "any").
+
+## D039: Fix strict-schema crash on the Claude path; area facts for filtered-out areas; friendly chat errors
+Date: 2026.10.18
+Status: accepted
+Context: Owner testing found every Claude-routed chat message failing with a raw 400 shown in the chat ("Enum value 'any' does not match declared type ['string','null']"). D038 had added `home_type` to the `update_filter` tool as `type: ["string","null"]` with an `enum`, which strict tool mode rejects. Fast-path messages kept working, so the D038 live checks (all fast path) missed it. Separately, Claude answered "what's the crime rate in San Jose?" with "I don't have San Jose crime rates" because filtered-out areas only carried their filter reason in the context.
+Decision:
+- Nullable enums in tool schemas are written as `anyOf: [{type: "string", enum: [...]}, {type: "null"}]`.
+- New test `lib/agent/schema.test.ts` walks every tool's `input_schema` and fails on strict-mode problems seen so far (`minimum`/`maximum`; `enum` with a type array; objects without `additionalProperties: false` or with non-required properties).
+- `buildContext()` adds `facts` for every mentioned area, ranked or filtered: population, neighborhood crime rate (or "no neighborhood crime data") with source, typical rent with source, rent by size with source, commute minutes with source.
+- The chat route logs the real error server-side and returns a plain message; the chat box never shows raw API errors.
+Alternatives considered: Dropping `strict` from tools (loses the schema guarantee); describing filtered areas only by their filter reason (Claude can't answer simple data questions about them).
+Consequences: Any future tool-schema change is checked by the test before it reaches the API. Verified live: the San Jose question now returns per-ZIP rates with sources; a mixed request ("2 bedroom and safety matters most", Jev confidence 0.52) went to Claude, which applied both changes.
+
+## D040: FBI city-wide rates as the safety fallback, on a separate scale
+Date: 2026.10.18
+Status: accepted (supersedes the "context only, not in the ranking" part of D033)
+Context: The owner asked why crime wasn't shown for many areas. Only 69 areas have neighborhood crime rates; the other 135 showed "Safety: no data" and were reweighted (D026), so with a high safety slider they could rank near the top on the factor they were missing. FBI city-wide rates exist for all 208 areas (D033). Owner chose to use them as a fallback in the score.
+Decision:
+- Areas with a neighborhood rate are scored exactly as before, as an inverted percentile among the 69 neighborhood rates.
+- Areas without one use their police agency's FBI rate (violent + property per 1,000, `fbi_violent_per_1000 + fbi_property_per_1000`), scored as an inverted percentile **among the other FBI-based areas only** (one entry per area).
+- **Why separate scales:** in the three cities with both, the population-weighted neighborhood rate is 1.63× the FBI rate in SF, 1.31× in Oakland and 0.97× in San Jose. The sources count different incident sets, so mixing them in one percentile would make FBI-only cities look systematically safer. A single conversion factor isn't stable across cities, so none is invented.
+- Labeling: `inputs.basis` is "neighborhood" or "city-wide (FBI)"; the explanation reads "City-wide estimate: <agency> reports X violent and property crimes per 1,000 residents a year; safer than N% of the M areas scored this way. No neighborhood-level data here." The top 5 shows a "city-wide safety" tag; the chat context carries both rates with sources. An area with neither source still has no safety score (never zero).
+Alternatives considered: Card-only (D033; leaves 135 areas unscored on safety); pooling raw FBI and neighborhood rates (bias above); calibrating FBI by a fitted ratio (1.0–1.6 spread makes any single factor arbitrary).
+Consequences: Every ranked area now has a safety score (from 1 Market St: 33 neighborhood, 60 city-wide). Rankings shift: e.g. Daly City 94014 moved from #1 to #5 once its safety (61st percentile) counted. All ZIPs in one city share their city-wide safety score. A 100 means "safest of its kind" (safest neighborhood, or safest city), which the explanation states.
+
+## D041: Visual refresh: Figtree + EB Garamond, warm design tokens, roomier layout
+Date: 2026.10.18
+Status: accepted
+Context: The owner found the UI cramped and not premium, and asked for type like Wispr Flow's. The app was also rendering in Arial: a leftover `font-family` rule in `globals.css` overrode the Geist font set up in the layout.
+Decision:
+- Fonts: **Figtree** for text and **EB Garamond** (with italics) for headings and big numbers, the pairing wisprflow.ai serves (checked from its font files). Both load through `next/font/google`, so they're self-hosted at build time with no runtime request to Google.
+- Colors are CSS variables in `app/globals.css` (warm paper background, near-black ink, muted gray, one deep green accent), exposed to Tailwind as `bg-paper`, `text-ink`, `text-muted`, `border-line`, `bg-accent` and so on. Dark mode swaps only the variable values, so components no longer need `dark:` variants for these.
+- Layout: wider sidebar (26–28rem) with more padding; rounded panels; pill buttons and inputs. Area-card rows put the value on the right with its source link on a second line, so long source names no longer squeeze the row.
+Alternatives considered: keeping Geist with spacing fixes only (doesn't answer the "premium" ask); a paid typeface (licensing cost).
+Consequences: New UI should use the tokens rather than raw `zinc-*` colors; a few untouched spots (e.g. the Sources page body) still use zinc and can move over gradually. The score-map colors are unchanged.
+
+## D042: Send what's on screen with every chat message
+Date: 2026.10.18
+Status: accepted
+Context: The owner opened Los Altos (office in Los Altos) and asked to compare "it" with San Jose for rent and extra commute. The chat only received the message and the form inputs, so "it" meant nothing, and the fast compare reply gave only rank and score.
+Decision:
+- The browser sends `view: { selectedZcta, compared }` with each message. The server validates it (`parseViewState`: 5-digit 9xxxx ZIPs, compared list deduplicated, at most 8); bad values become empty.
+- Fast path: if a compare message names only one place and a card is open, the open ZIP is compared with it. Compare replies now include rent for the user's home size and drive time, with differences from the first place (the open area when there is one).
+- Claude path: the open area, then compared areas, lead `mentioned_areas`. The context gains `on_screen`, and each other area gets `vs_selected_area` with precomputed rent and commute differences. Claude may only quote numbers from its context, so the subtraction is done in code.
+- The chat shows "Asking about <area>" above the input, so the user can see what "it" refers to.
+- Also updated the Claude system prompt's safety line, which still said safety existed only for SF, Oakland and San Jose (outdated since D040).
+Alternatives considered: sending the past few chat turns (helps follow-ups but adds earlier numbers to grounding and longer prompts; can be added later); asking the user which area they mean (slower than reading the screen).
+Consequences: "it/this/here" works on both routes. For a multi-ZIP city like San Jose, the comparison uses its best-ranked ZIP and says so. Chat history is still not sent.
+
+## D043: Explanations state what the data shows, not what's missing
+Date: 2026.10.18
+Status: accepted
+Context: The city-wide safety explanation (D040) ended with "No neighborhood-level data here (only SF, Oakland and San Jose publish it)." The owner asked not to highlight negatives: say what we know.
+Decision: The sentence is removed. The explanation now reads "City-wide: <agency> reports X violent and property crimes per 1,000 residents a year; safer than N% of the M areas scored this way." "City-wide" still tells the reader the figure's scope. The coverage caveat stays on the Sources page and in the README, where it belongs.
+Alternatives considered: keeping a softer caveat on each card (still reads as a negative on every non-SF/Oakland/San Jose area).
+Consequences: Applies to user-facing score text. "No data" labels stay where a value is truly missing, since showing nothing would be misleading.
+
+## D044: Chat as a floating, minimizable window in the bottom-right corner
+Date: 2026.10.18
+Status: superseded in part by D045
+Context: The chat sat at the bottom of the sidebar, so it scrolled out of view and was hard to find. The owner asked for the familiar support-chat placement: bottom-right, always on screen, minimizable but never removable, and separate from the map legend.
+Decision:
+- `ChatBox` renders with `position: fixed` at the bottom-right of the viewport, from `Explorer` (outside the sidebar), so page scroll never moves it. It opens as a panel (24rem wide, or the screen width minus margins on phones; up to 36rem tall) and minimizes to an "Ask Settle" button. There is no close button. It starts minimized; messages survive minimizing.
+- Before the first search the button and panel still show, with the input disabled and a "Run a search first" hint.
+- The map legend and the map credits (ⓘ) moved to the bottom-left corner; the sidebar gets extra bottom padding on phones so the button never covers its last item.
+Alternatives considered: a chat tab inside the sidebar (still scrolls, competes with the form); a draggable window (more code, and easy to drag off screen, which the owner ruled out).
+Consequences: On narrow desktop windows the open panel can overlap the legend; minimizing it clears the view. The legend's placement in older screenshots in `docs/screenshots/` is out of date until they're retaken.
+
+## D045: Chat appears after a search as a docked banner; legend top-right; centered title
+Date: 2026.10.18
+Status: accepted
+Context: Owner feedback on D044: the chat should appear only once something has been searched; minimized, it should be a banner rather than an "Ask Settle" button; the map legend should sit in the top-right corner; and the Settle title should be centered.
+Decision:
+- `Explorer` renders `ChatBox` only after the first result. The window is docked to the bottom edge, 1rem from the right, 24rem wide. Minimized, it's a banner of the same width titled "Ask or adjust", with a subtitle showing the open area or an example question and an up chevron. It still can't be closed. It starts minimized.
+- Map: legend top-right; zoom buttons moved to top-left; the hover card moved to bottom-left above the map credits.
+- Header: a three-column grid (spacer, title, "Data sources") so "Settle" and its tagline are centered on the page.
+Alternatives considered: keeping the chat visible but disabled before a search (D044; the owner preferred hiding it); a pill-style launcher (rejected by the owner).
+Consequences: First-time visitors don't see the chat until they search, so the empty-state text doesn't mention it. Screenshots in `docs/screenshots/` are out of date until retaken.
+
+## D046: Slim one-row header; tagline moves under the form heading
+Date: 2026.10.18
+Status: accepted
+Context: The centered title plus tagline (D045) made the header two lines tall (91 px), taking space from the map. The owner also saw the zoom buttons overlapping the legend.
+Decision: The header is one row (45 px): "Settle" centered, "Data sources" on the right. The tagline ("Bay Area neighborhoods, ranked for your salary, office and priorities.") now sits in small text under "Where should you live?" in the sidebar. The legend's maximum width leaves 5rem on the left, so it can never reach the top-left zoom buttons on a narrow map. (The overlap the owner saw was an old map instance from before D045: map controls are placed once when the map loads, so a dev hot reload keeps them in their old corner until the page is refreshed.)
+Alternatives considered: deleting the tagline (loses the one-line explanation for new visitors); putting it on the right of the header (crowds "Data sources" and wraps on phones).
+Consequences: More vertical room for the map and sidebar.
+
+## D047: Side-by-side comparison from the map
+Date: 2026.10.19
+Status: accepted
+Context: Comparing areas was only possible through the chat, and its answer was a line of text. The owner asked to click a second area on the map and choose between opening it or adding it to a comparison, with the areas side by side, every value matched row by row (shared room against shared room), one shared scroll, and the better value highlighted.
+Decision:
+- With an area card or comparison open, a map click on another area shows a small chooser at the click point: "Open this area" or "Add to compare". With nothing open, a click still opens the card directly, and the top 5 list always opens directly.
+- Up to 3 areas. When full, "Add to compare" becomes "Swap into comparison" and replaces the last column.
+- `lib/compare.ts` (pure, unit tested) builds matched rows from the same data the card uses. Each row says which way is better: lower for rent, rank, drive time, risk flags, crime, landslide and hot days; higher for scores and fiber providers. Population, home value, airport and major road distance are neutral (closer can mean convenience or noise), so they're never highlighted. No data is never best, and a tie across all areas highlights nothing.
+- `CompareView` draws everything as one CSS grid (label column plus one column per area), so rows can't drift apart and the whole table scrolls as one, with area names pinned at the top. The sidebar widens to min(46rem, 68% of the screen) while comparing, covering part of the map.
+- Every value keeps its source link under it.
+- The chat's compare action now opens the same view, and removing down to one area shows that area's card.
+Alternatives considered: two separate cards side by side (rows drift apart, each scrolls on its own, which the owner ruled out); a full-screen compare page (loses the map with its blue outlines).
+Consequences: Comparisons work before a search too (no score rows then). The direction choices for neutral rows can be revisited.
+
+## D048: Public-transit commute from precomputed 511.org timetables
+Date: 2026.10.19
+Status: accepted
+Context: The owner asked for approximate public-transit commute times next to driving (a v2 item in CLAUDE.md). Live options (Google transit directions) cost money per search, cap requests at 100 areas, and can't be stored. The owner chose precomputed times.
+Decision:
+- **Data:** 511.org Open Data regional GTFS (`operator_id=RG`, every Bay Area operator in one feed; 43 operators listed). License: the 511 Data Disseminator Agreement (2026 PDF, checked 2026.10.19) grants use, storage, derived works and public display. It requires the credit "data provided by 511.org" with a link to 511.org next to the data, and documentation to MTC within 30 days of a public launch (to do at deploy). Rate limit 60 requests/hour; the pipeline makes one request and caches the file. The 511 site's general terms (personal, non-commercial) don't apply to token API use, which they explicitly carve out. OSM street and footpath network from Geofabrik's Northern California extract, cropped with osmium-tool to the five counties plus about 5 km (194 MB).
+- **Routing:** r5py 1.1.7 (Conveyal R5; GPL-3.0-or-later or MIT) with Java 21 (Homebrew `openjdk@21`, found via `JAVA_HOME`, no system install). Transit plus walking at 4.8 km/h, from each area's population-weighted center to every other area's center: 208 × 208 = 43,264 pairs. Departure every minute 7:30–9:00 on a typical Tuesday in the feed (2026-10-27; holidays skipped); the stored time is the median over that window. Trips over 2 hours count as no route. 16,265 pairs have a route.
+- **Feed fix:** R5 rejects the 511 feed because 232 station pathway nodes (`location_type` 3) have blank names, which the GTFS standard allows. The pipeline writes a copy with those names set to their stop IDs; no other change.
+- **Same-area trips:** routed center to center they'd be 0, so they're estimated as half the time to the nearest other area (a standard transport-model convention) and labeled "estimated".
+- **App:** the office is matched to the area containing it (or the nearest center within 3 km), and every area's time is looked up to that area's center, with no API calls. A "How do you get to work? Drive / Public transit" toggle decides which time is filtered and scored; explanations, cards, comparisons and the chat show both. The chat parses "take the train / BART / public transit" and "drive instead" on the fast path, and Claude's `update_filter` tool gains `commute_mode`.
+Alternatives considered: Google transit on demand (cost, 100-element cap, no storage); OpenTripPlanner as a live server (can't run on Vercel); park-and-ride access by car (closer to how many suburban commuters reach BART, but more modeling; possible follow-up).
+Consequences: Times are door-to-door from area centers with walking only, so suburbs far from stations look slower than a drive-to-BART commute (e.g. Antioch's center is 2.9 km from its BART station; Antioch to the Financial District comes out just over 2 hours). Spot checks: Oakland 94612 → Financial District 94105, 30 min; Mission 94110 → 94105, 25 min. With a 45-minute max from 1 Market St, 15 areas pass in transit mode against 80 driving. The matrix must be recomputed when timetables change (re-run fetch, compute and load).
+
+## D049: Pair cards in a random order with random sides
+Date: 2026.10.19
+Status: accepted (refines D027)
+Context: The owner noticed some options were shown more than others. The six cards already cover every pair of the four priorities (4 choose 2 = 6, each priority in exactly 3 cards), but they always came in the same order with the same sides. Affordability filled the first three cards and was always on the left, and hidden risks was always on the right. Anyone who skipped partway mostly answered affordability questions, and left/right position can bias a choice.
+Decision: `shuffledDeck()` deals the six cards with a Fisher-Yates shuffle (all 720 orders equally likely) and puts each card's options on random sides (50/50). It runs only in the browser, after hydration (`useSyncExternalStore`), so server and browser HTML match. The cards stay hidden until then so the unshuffled order never flashes. "Redo the questions" deals a fresh deck. Answers are stored with their card and the next card is the first unanswered pair, so scoring (`prioritiesFromAnswers`, same 2 × (wins + 1) mapping) doesn't depend on order. A seeded test deals 60,000 decks and checks each card lands in each position about 1/6 of the time and each option is on the left about half the time.
+Alternatives considered: more cards, e.g. both orders of each pair or repeats (asks the same question twice and adds no information); a fixed balanced order (still the same for everyone, and "first card" bias stays on one pair).
+Consequences: Two people see the cards in different orders; slider results for the same answers are identical.

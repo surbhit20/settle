@@ -24,6 +24,7 @@ const GROUPS: { title: string; sources: Source[] }[] = [
     title: "Housing",
     sources: [
       { name: "Zillow Research: Zillow Observed Rent Index (ZORI)", url: "https://www.zillow.com/research/data/", use: "Typical rent and 3-year change (affordability score, rent map)", license: "Zillow Research public data; attribution to Zillow" },
+      { name: "HUD Small Area Fair Market Rents (FY2027)", url: "https://www.huduser.gov/portal/datasets/fmr/smallarea/index.html", use: "Rent by home size (studio to 4 bedrooms) per ZIP; a shared room is estimated as a third of the 3-bedroom rent", license: "Public domain (US government work)" },
       { name: "Zillow Research: Zillow Home Value Index (ZHVI)", url: "https://www.zillow.com/research/data/", use: "Typical home value (shown on area cards)", license: "Zillow Research public data; attribution to Zillow" },
     ],
   },
@@ -50,13 +51,16 @@ const GROUPS: { title: string; sources: Source[] }[] = [
       { name: "Oakland Police Department CrimeWatch (City of Oakland)", url: "https://data.oaklandca.gov/d/ppgh-7dqv", use: "Neighborhood crime rate (14 Oakland areas)", license: "Published under the City of Oakland open data policy; no license stated" },
       { name: "San Jose Police Department calls for service (data.sanjoseca.gov)", url: "https://data.sanjoseca.gov/dataset/police-calls-for-service-quarterly", use: "Neighborhood crime rate (29 San Jose areas), calls with a report or arrest only", license: "CC0 (public domain)" },
       { name: "US Census Geocoder", url: "https://geocoding.geo.census.gov/", use: "Placing San Jose block addresses on the map", license: "Public domain" },
-      { name: "FBI Crime Data Explorer (UCR)", url: "https://cde.ucr.cjis.gov/", use: "City-wide crime rates on area cards, for context only (not scored)", license: "Public domain" },
+      { name: "FBI Crime Data Explorer (UCR)", url: "https://cde.ucr.cjis.gov/", use: "City-wide crime rates on area cards, and the safety score for areas outside SF, Oakland and San Jose (labeled 'city-wide')", license: "Public domain" },
     ],
   },
   {
     title: "Commute and maps",
     sources: [
       { name: "openrouteservice by HeiGIT", url: "https://openrouteservice.org/", use: "Drive time from each area to your office (no traffic)", license: "© openrouteservice.org by HeiGIT; routing data © OpenStreetMap contributors (ODbL)" },
+      { name: "Transit timetables: data provided by 511.org", url: "http://www.511.org", use: "Regional GTFS timetables for every Bay Area transit operator, used to compute typical weekday-morning public-transit times between areas", license: "511 Data Disseminator Agreement (MTC): free; credit \"data provided by 511.org\"" },
+      { name: "r5py / Conveyal R5", url: "https://r5py.readthedocs.io/", use: "Transit routing engine (run offline) on the 511 timetables and OpenStreetMap walking network", license: "GPL-3.0-or-later or MIT (r5py); MIT (R5)" },
+      { name: "OpenStreetMap via Geofabrik", url: "https://download.geofabrik.de/north-america/us/california/norcal.html", use: "Street and footpath network for walking to and from stations", license: "© OpenStreetMap contributors (ODbL)" },
       { name: "OpenFreeMap and OpenMapTiles", url: "https://openfreemap.org/", use: "Basemap tiles", license: "Map data © OpenStreetMap contributors (ODbL)" },
       { name: "MapLibre GL JS", url: "https://maplibre.org/", use: "Map rendering", license: "BSD-3-Clause" },
     ],
@@ -72,11 +76,15 @@ const GROUPS: { title: string; sources: Source[] }[] = [
 
 const CAVEATS = [
   "Scores rank areas against each other for your inputs; they are not advice.",
-  "Commute times are drive times without traffic. Rush hour is often much longer.",
-  "Neighborhood crime data exists only for San Francisco, Oakland and San Jose (69 areas). Other areas are scored without safety and marked \"partial data\".",
+  "Drive times are without traffic. Rush hour is often much longer.",
+  "Public-transit times are typical for a weekday morning (median over departures 7:30–9:00 am), measured from each area's population-weighted center to the center of the area your office is in, including walking. Trips within the same area are estimated as half the trip to the nearest other area.",
+  "Neighborhood crime data exists only for San Francisco, Oakland and San Jose (69 areas). Other areas get a city-wide safety score from FBI data, ranked only against other city-wide scores because the two sources count crimes differently.",
   "San Jose publishes police calls, not incident reports; its counts are adjusted for addresses that couldn't be mapped.",
   "Risk values are measured at each area's population-weighted center, not at every address.",
-  "Areas without Zillow rent data are listed after every area whose rent is known.",
+  "Areas without rent data for your home size are listed after every area whose rent is known.",
+  "Rent by home size comes from HUD's Small Area Fair Market Rents: the 40th percentile of rent including utilities, so it can run below current asking rents. 'Any size' uses Zillow's typical rent instead.",
+  "A room in a shared home has no official figure; it is estimated as a third of the area's 3-bedroom rent.",
+  "Areas with fewer than 1,000 residents (airport, office districts, campuses, open space) aren't ranked.",
 ];
 
 export default function SourcesPage() {
@@ -85,7 +93,7 @@ export default function SourcesPage() {
       <Link href="/" className="text-sm text-zinc-600 underline dark:text-zinc-400">
         ← Back to the map
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Data sources</h1>
+      <h1 className="mt-6 font-serif text-4xl tracking-tight">Data sources</h1>
       <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
         Every number in Settle links to its source on the area card. This page lists them all in one place.
       </p>

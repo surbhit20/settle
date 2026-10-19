@@ -5,7 +5,7 @@ import type { Metric } from "@/lib/risks";
 export default function SourceLink({ metric }: { metric: Pick<Metric, "source" | "source_url" | "dataset_vintage"> }) {
   return (
     <a
-      className="text-xs text-zinc-500 underline decoration-dotted hover:text-zinc-800 dark:hover:text-zinc-200"
+      className="text-[0.75rem] text-muted underline decoration-dotted underline-offset-2 hover:text-ink"
       href={metric.source_url}
       target="_blank"
       rel="noreferrer"

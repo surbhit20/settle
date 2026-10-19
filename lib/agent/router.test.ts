@@ -3,8 +3,8 @@ import { toolToAction, type LlmResponder } from "@/lib/agent/claude";
 import { buildContext } from "@/lib/agent/context";
 import { intentRequest, parseIntentAnswer } from "@/lib/agent/jev";
 import { ROUTER_CONFIDENCE, routeMessage, type RouterInput } from "@/lib/agent/router";
-import type { Intent } from "@/lib/agent/types";
-import type { ScoredArea, ScoreResult } from "@/lib/scoring/types";
+import { parseViewState, type Intent } from "@/lib/agent/types";
+import type { AreaInputs, ScoredArea, ScoreResult } from "@/lib/scoring/types";
 
 function scored(zcta: string, name: string, rank: number, score: number): ScoredArea {
   const sub = { score: 80, explanation: "x", inputs: {}, sources: [{ name: "Src", url: "https://s" }] };
@@ -16,6 +16,7 @@ function scored(zcta: string, name: string, rank: number, score: number): Scored
 }
 
 const result: ScoreResult = {
+  homeType: "any",
   monthlyIncomeUsd: 15000,
   budgetUsd: 4500,
   budgetDerived: true,
@@ -48,7 +49,7 @@ describe("routeMessage", () => {
     const r = await routeMessage(input("what if my budget goes up 300"), d);
     expect(r.route).toBe("jev");
     expect(r.actions).toEqual([{ type: "update_filter", changes: { rentBudgetUsd: 4800 } }]);
-    expect(r.reply).toBe("Updated: rent budget $4,500 → $4,800/mo. The map is recoloring.");
+    expect(r.reply).toBe("Updated rent budget from $4,500 to $4,800 per month.");
     expect(d.llm).not.toHaveBeenCalled();
   });
 
@@ -56,6 +57,7 @@ describe("routeMessage", () => {
     const r = await routeMessage(input("I care more about safety"), deps("set_priority"));
     expect(r.route).toBe("jev");
     expect(r.actions[0]).toEqual({ type: "set_priority", priorities: { affordability: 5, commute: 5, safety: 8, risks: 5 } });
+    expect(r.reply).toBe("Updated safety priority from 5 to 8 out of 10.");
   });
 
   it("compares places deterministically, best ZIP per place", async () => {
@@ -63,7 +65,7 @@ describe("routeMessage", () => {
     expect(r.route).toBe("jev");
     expect(r.actions).toEqual([{ type: "compare", zctas: ["94110", "95035"] }]);
     expect(r.reply).toContain("San Francisco: best is 94110 at #1, score 90 (2 of 2 ZIPs ranked).");
-    expect(r.reply).toContain("Milpitas: best is 95035 at #7, score 70.");
+    expect(r.reply).toContain("Milpitas: #7, score 70.");
   });
 
   it("says when a compared place was filtered out", async () => {
@@ -187,5 +189,122 @@ describe("mentionedAreas", () => {
   it("orders a place's ZIPs by rank and caps the list", () => {
     expect(mentionedAreas(input("how is San Francisco?"))).toEqual(["94110", "94112"]); // ranks 1 and 3
     expect(mentionedAreas(input("how is San Francisco?"), 1)).toEqual(["94110"]);
+  });
+});
+
+describe("home size on the fast path", () => {
+  it("'what if I get a 2 bedroom' changes the home size with no LLM call", async () => {
+    const d = deps("update_filter");
+    const r = await routeMessage(input("what if I get a 2 bedroom"), d);
+    expect(r.route).toBe("jev");
+    expect(r.actions).toEqual([{ type: "update_filter", changes: { homeType: "2br" } }]);
+    expect(r.reply).toBe("Updated home size from any size (typical home) to 2 bedrooms.");
+    expect(d.llm).not.toHaveBeenCalled();
+  });
+
+  it("Claude's update_filter tool can set the home size", () => {
+    expect(toolToAction("update_filter", { rent_budget_usd: null, max_commute_min: null, salary_usd: null, home_type: "studio" }))
+      .toEqual({ type: "update_filter", changes: { homeType: "studio" } });
+    expect(toolToAction("update_filter", { rent_budget_usd: null, max_commute_min: null, salary_usd: null, home_type: "castle" })).toBeNull();
+  });
+});
+
+describe("buildContext facts for filtered-out areas", () => {
+  it("includes population, neighborhood crime rate and rents even when an area was filtered", () => {
+    const inputs = [{
+      zcta: "94301", name: "Palo Alto", county: "C", rentUsd: 4219, rentSource: null, commuteMin: 30,
+      commuteSource: { name: "ORS", url: "u" }, crimeRatePer1000: 18.24,
+      crimeSource: { name: "Some PD", url: "https://pd" }, risks: [], population: 17508,
+      rentsBySize: { "2br": { usd: 4100, source: null } },
+    }];
+    const c = buildContext(input("x").request, result, ["94301"], inputs);
+    expect(c.mentioned_areas[0]).toMatchObject({
+      zcta: "94301",
+      filtered_out: "rent_over_budget",
+      facts: { population: 17508, neighborhood_crime_rate_per_1000: 18.2, typical_rent_usd: 4219, rent_by_size_usd: { "2br": 4100 } },
+    });
+  });
+});
+
+// Area data for the on-screen tests: Los Altos (open on screen) and two San Jose ZIPs.
+function area(zcta: string, name: string, rentUsd: number | null, commuteMin: number | null): AreaInputs {
+  return {
+    zcta, name, county: "Santa Clara", rentUsd, rentSource: null, commuteMin,
+    commuteSource: { name: "ORS", url: "u" }, crimeRatePer1000: null, crimeSource: null, risks: [], population: 30000,
+    rentsBySize: { "1br": { usd: rentUsd === null ? null : rentUsd - 1000, source: null } },
+  };
+}
+
+const viewResult: ScoreResult = {
+  ...result,
+  ranked: [scored("94022", "Los Altos", 2, 88), scored("95125", "San Jose", 9, 74), scored("95112", "San Jose", 15, 66)],
+  filtered: [],
+};
+
+const viewInput = (message: string, selectedZcta: string | null): RouterInput => ({
+  ...input(message),
+  result: viewResult,
+  areas: [
+    { zcta: "94022", name: "Los Altos" }, { zcta: "95125", name: "San Jose" }, { zcta: "95112", name: "San Jose" },
+  ],
+  inputs: [area("94022", "Los Altos", 4200, 9), area("95125", "San Jose", 3500, 24), area("95112", "San Jose", 3000, 27)],
+  view: { selectedZcta, compared: [] },
+});
+
+describe("what's on screen", () => {
+  it("'compare it with San Jose' compares the open area, with rent and commute differences", async () => {
+    const d = deps("compare");
+    const r = await routeMessage(viewInput("compare it with San Jose for rent and commute", "94022"), d);
+    expect(r.route).toBe("jev");
+    expect(r.actions).toEqual([{ type: "compare", zctas: ["94022", "95125"] }]);
+    expect(r.reply).toContain("Los Altos 94022: #2, score 88; typical rent $4,200/mo, about 9 min drive.");
+    expect(r.reply).toContain(
+      "San Jose: best is 95125 at #9, score 74 (2 of 2 ZIPs ranked); typical rent $3,500/mo ($700 less), about 24 min drive (15 min more).",
+    );
+    expect(d.llm).not.toHaveBeenCalled();
+  });
+
+  it("uses the rent for the user's home size", async () => {
+    const i = viewInput("compare it with San Jose", "94022");
+    i.request = { ...i.request, homeType: "1br" };
+    const r = await routeMessage(i, deps("compare"));
+    expect(r.reply).toContain("1-bedroom rent $3,200/mo");
+    expect(r.reply).toContain("1-bedroom rent $2,500/mo ($700 less)");
+  });
+
+  it("a comparison about safety goes to Claude, with the open area in context", async () => {
+    const d = deps("compare");
+    const r = await routeMessage(viewInput("is this area safer than San Jose?", "94022"), d);
+    expect(r.route).toBe("llm");
+    const context = d.llm.mock.calls[0][1] as { on_screen: unknown; mentioned_areas: { zcta: string }[] };
+    expect(context.on_screen).toEqual({ selected_area: "94022", compared_areas: [] });
+    expect(context.mentioned_areas[0].zcta).toBe("94022");
+  });
+
+  it("with nothing open, one named place still goes to Claude", async () => {
+    const d = deps("compare");
+    const r = await routeMessage(viewInput("compare it with San Jose", null), d);
+    expect(r.route).toBe("llm");
+  });
+
+  it("puts the open area first in Claude's context, with precomputed differences", async () => {
+    const i = viewInput("is this area cheaper than San Jose?", "94022");
+    expect(mentionedAreas(i)).toEqual(["94022", "95125", "95112"]);
+    const c = buildContext(i.request, i.result, mentionedAreas(i), i.inputs, i.view);
+    expect(c.on_screen).toEqual({ selected_area: "94022", compared_areas: [] });
+    expect(c.mentioned_areas[1]).toMatchObject({
+      zcta: "95125",
+      vs_selected_area: { compared_with: "94022", rent_difference_usd_per_month: -700, commute_difference_min: 15 },
+    });
+    expect(c.mentioned_areas[0]).not.toHaveProperty("vs_selected_area");
+  });
+
+  it("validates the view sent by the browser", () => {
+    expect(parseViewState({ selectedZcta: "94022", compared: ["95125", "95125", "nope", 7] })).toEqual({
+      selectedZcta: "94022",
+      compared: ["95125"],
+    });
+    expect(parseViewState({ selectedZcta: "<script>" })).toEqual({ selectedZcta: null, compared: [] });
+    expect(parseViewState(undefined)).toEqual({ selectedZcta: null, compared: [] });
   });
 });

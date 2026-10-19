@@ -28,3 +28,17 @@ describe("parseScoreRequest", () => {
     expect(parseScoreRequest(null)).toBe("Salary is required.");
   });
 });
+
+describe("parseScoreRequest home type", () => {
+  const base = {
+    salaryUsd: 180000, officeAddress: "1 Market St, San Francisco, CA", maxCommuteMin: 45, rentBudgetUsd: null,
+    priorities: { affordability: 5, commute: 5, safety: 5, risks: 5 },
+  };
+  it("defaults to any and accepts known types", () => {
+    expect(parseScoreRequest(base)).toMatchObject({ homeType: "any" });
+    expect(parseScoreRequest({ ...base, homeType: "2br" })).toMatchObject({ homeType: "2br" });
+  });
+  it("rejects unknown types", () => {
+    expect(parseScoreRequest({ ...base, homeType: "castle" })).toBe("Unknown home type.");
+  });
+});

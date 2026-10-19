@@ -4,6 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ungroundedNumbers } from "@/lib/agent/grounding";
 import type { AgentAction } from "@/lib/agent/types";
+import type { HomeType } from "@/lib/scoring/types";
 
 export const CLAUDE_MODEL = "claude-opus-5-5";
 
@@ -14,11 +15,13 @@ Rules:
 - Keep replies short: 2-5 sentences, plain text, no markdown headings.
 - If the user wants to change their budget, max commute, salary, or priorities, call the matching tool. If they ask about specific areas, call select_area or compare_areas so the map shows them.
 - Call any tools first, without commentary. After the tool results come back, write your complete answer in that final message (the user only sees the final message).
-- Safety only exists for areas with city crime data; say so if asked about an area without it.`;
+- CONTEXT.on_screen.selected_area is the area card the user has open. "It", "this", "here" or "this area" mean that area; its details are in mentioned_areas. on_screen.compared_areas are the areas outlined from their last comparison.
+- When comparing areas, give rent for the user's home type and commute minutes for each, and the difference.
+- Safety comes from neighborhood crime data in SF, Oakland and San Jose, and from the city-wide FBI rate elsewhere (check sub_scores.safety.inputs.basis); say which one you're using.`;
 
 // Strict schemas: every field required, nullable where optional (strict mode needs additionalProperties: false
 // and rejects minimum/maximum on integers, so ranges are in descriptions and toolToAction clamps).
-const TOOLS: Anthropic.Beta.Messages.BetaTool[] = [
+export const TOOLS: Anthropic.Beta.Messages.BetaTool[] = [
   {
     name: "update_filter",
     description: "Change the user's search filters. Pass null for anything that should stay the same.",
@@ -29,8 +32,21 @@ const TOOLS: Anthropic.Beta.Messages.BetaTool[] = [
         rent_budget_usd: { type: ["number", "null"], description: "New monthly rent budget in USD" },
         max_commute_min: { type: ["number", "null"], description: "New maximum commute in minutes" },
         salary_usd: { type: ["number", "null"], description: "New annual salary in USD" },
+        // Strict mode rejects `enum` combined with a ["string", "null"] type, so the nullable
+        // enum is written as anyOf (a string from the list, or null).
+        home_type: {
+          anyOf: [
+            { type: "string", enum: ["any", "shared", "studio", "1br", "2br", "3br", "4br"] },
+            { type: "null" },
+          ],
+          description: "Home size: any, shared (room in a shared home), studio, 1br..4br; null = unchanged",
+        },
+        commute_mode: {
+          anyOf: [{ type: "string", enum: ["drive", "transit"] }, { type: "null" }],
+          description: "How the user gets to work: drive or transit (public transit); null = unchanged",
+        },
       },
-      required: ["rent_budget_usd", "max_commute_min", "salary_usd"],
+      required: ["rent_budget_usd", "max_commute_min", "salary_usd", "home_type", "commute_mode"],
       additionalProperties: false,
     },
   },
@@ -79,10 +95,13 @@ export function toolToAction(name: string, input: Record<string, unknown>): Agen
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
   switch (name) {
     case "update_filter": {
+      const homeTypes = ["any", "shared", "studio", "1br", "2br", "3br", "4br"];
       const changes = {
         rentBudgetUsd: num(input.rent_budget_usd),
         maxCommuteMin: num(input.max_commute_min),
         salaryUsd: num(input.salary_usd),
+        homeType: homeTypes.includes(String(input.home_type)) ? (input.home_type as HomeType) : undefined,
+        commuteMode: input.commute_mode === "drive" || input.commute_mode === "transit" ? input.commute_mode : undefined,
       };
       const defined = Object.fromEntries(Object.entries(changes).filter(([, v]) => v !== undefined));
       return Object.keys(defined).length ? { type: "update_filter", changes: defined } : null;

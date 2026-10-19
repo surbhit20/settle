@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findAreas, parseAmount, parseFilterChange, parsePriorityChange } from "@/lib/agent/parse";
+import { findAreas, parseAmount, parseCommuteMode, parseFilterChange, parsePriorityChange } from "@/lib/agent/parse";
 
 const base = { salaryUsd: 180_000, maxCommuteMin: 45, budgetUsd: 4500 };
 
@@ -79,5 +79,54 @@ describe("findAreas", () => {
 
   it("never matches the 'Unincorporated' placeholder names", () => {
     expect(findAreas("unincorporated san mateo", areas)).toEqual([]);
+  });
+});
+
+import { parseHomeType } from "@/lib/agent/parse";
+
+describe("parseHomeType", () => {
+  it.each([
+    ["what if I get a 2 bedroom?", "2br"],
+    ["show me studios", "studio"],
+    ["3 bhk please", "3br"],
+    ["a two-bed place", "2br"],
+    ["I want to live with roommates", "shared"],
+    ["a room in a shared house", "shared"],
+    ["4br", "4br"],
+    ["any size is fine", "any"],
+  ])("%s -> %s", (msg, expected) => {
+    expect(parseHomeType(msg)).toBe(expected);
+  });
+
+  it("returns null when no size is mentioned", () => {
+    expect(parseHomeType("budget up 300")).toBeNull();
+  });
+});
+
+describe("parseFilterChange with home size", () => {
+  const b = { salaryUsd: 180_000, maxCommuteMin: 45, budgetUsd: 4500 };
+  it("doesn't read the bedroom number as another filter", () => {
+    expect(parseFilterChange("what if I get a 2 bedroom", b)).toEqual({ homeType: "2br" });
+  });
+  it("combines a size with a budget change", () => {
+    expect(parseFilterChange("3 bedroom with budget up 500", b)).toEqual({ homeType: "3br", rentBudgetUsd: 5000 });
+  });
+});
+
+describe("parseCommuteMode", () => {
+  it("reads transit and driving phrasing", () => {
+    expect(parseCommuteMode("what if I take the train")).toBe("transit");
+    expect(parseCommuteMode("show me public transit times")).toBe("transit");
+    expect(parseCommuteMode("I'd ride BART")).toBe("transit");
+    expect(parseCommuteMode("what if I drive instead")).toBe("drive");
+  });
+
+  it("ignores words that only contain a mode name", () => {
+    expect(parseCommuteMode("is this community safe?")).toBeNull();
+    expect(parseCommuteMode("what if my budget goes up 300")).toBeNull();
+  });
+
+  it("is applied as a filter change", () => {
+    expect(parseFilterChange("what if I take the train", { salaryUsd: 1, maxCommuteMin: 45, budgetUsd: 3000 })).toEqual({ commuteMode: "transit" });
   });
 });

@@ -15,6 +15,27 @@ export type AgentAction =
 
 export type Route = "jev" | "llm";
 
+// What the user has on screen when they send a message, so "it", "this" or "here" can be
+// resolved: the area card that's open, and the areas outlined by the last comparison.
+export type ViewState = {
+  selectedZcta: string | null;
+  compared: string[];
+};
+
+export const EMPTY_VIEW: ViewState = { selectedZcta: null, compared: [] };
+
+const ZIP = /^9\d{4}$/;
+
+// Validates the untrusted `view` object from the browser. Bad or missing parts become empty.
+export function parseViewState(raw: unknown): ViewState {
+  const v = (raw ?? {}) as { selectedZcta?: unknown; compared?: unknown };
+  const selectedZcta = typeof v.selectedZcta === "string" && ZIP.test(v.selectedZcta) ? v.selectedZcta : null;
+  const compared = Array.isArray(v.compared)
+    ? [...new Set(v.compared.filter((z): z is string => typeof z === "string" && ZIP.test(z)))].slice(0, 8)
+    : [];
+  return { selectedZcta, compared };
+}
+
 export type ChatReply = {
   reply: string;
   actions: AgentAction[];

@@ -27,7 +27,9 @@ type Props = {
   selectedZcta: string | null;
   compared?: string[]; // areas outlined after a chat "compare"
   busy?: boolean; // scoring in progress: show a small "Updating scores" pill
-  onSelect: (zcta: string) => void;
+  // `point` is where on the map the user clicked (pixels from the map's top-left), so the page
+  // can show a small menu there.
+  onSelect: (zcta: string, point?: { x: number; y: number; name: string | null }) => void;
   office: { lat: number; lng: number } | null;
 };
 
@@ -73,12 +75,15 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
         style: BASEMAP_STYLE,
         center: BAY_AREA_CENTER,
         zoom: 8.6,
-        // Compact "ⓘ" attribution: the expanded text covered the legend on phones. Full credits
-        // are also on the /sources page.
-        attributionControl: { compact: true },
+        // Attribution is added below, bottom-left, because the chat window owns the bottom-right corner.
+        attributionControl: false,
       });
       mapRef.current = map;
-      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+      // Compact "ⓘ" attribution: the expanded text covered the legend on phones. Full credits
+      // are also on the /sources page.
+      map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
+      // Zoom buttons top-left: the legend owns the top-right corner.
+      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
 
       // "style.load", not "load": see D014.
       map.once("style.load", async () => {
@@ -103,6 +108,9 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
           }
         };
         map.on("sourcedata", onData);
+        // Draw our areas under the basemap's first text layer, so place names stay on top
+        // of the colors. `?.id` gives undefined if there's no text layer (then: on top).
+        const firstLabelId = map.getStyle().layers.find((l) => l.type === "symbol")?.id;
         map.addLayer({
           id: "areas-fill",
           type: "fill",
@@ -112,7 +120,7 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
             "fill-color": rentFillExpression() as unknown as string,
             "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.9, 0.65],
           },
-        });
+        }, firstLabelId);
         map.addLayer({
           id: "areas-outline",
           type: "line",
@@ -131,7 +139,7 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
               0.6,
             ],
           },
-        });
+        }, firstLabelId);
 
         map.on("mousemove", "areas-fill", (e) => {
           const f: MapGeoJSONFeature | undefined = e.features?.[0];
@@ -154,7 +162,7 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
         });
         map.on("click", "areas-fill", (e) => {
           const f = e.features?.[0];
-          if (f) onSelectRef.current(String(f.properties.zcta));
+          if (f) onSelectRef.current(String(f.properties.zcta), { x: e.point.x, y: e.point.y, name: f.properties.name ?? null });
         });
         setReady(true);
       });
@@ -165,6 +173,10 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
+      // A fresh map starts on the rent colors, so mark it not ready: when it is, effect 2
+      // reruns and repaints the scores. (Matters when dev hot reload rebuilds the map.)
+      setReady(false);
+      setPainted(false);
     };
   }, []);
 
@@ -223,25 +235,25 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
 
       {!painted && !error && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className="rounded-md bg-white/95 px-3 py-2 text-sm text-zinc-600 shadow dark:bg-zinc-900/95 dark:text-zinc-300">
+          <span className="rounded-full bg-surface/95 px-4 py-2 text-sm text-muted shadow-lg backdrop-blur">
             Loading map…
           </span>
         </div>
       )}
       {busy && ready && (
-        <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-full bg-zinc-900/90 px-3 py-1 text-xs text-white shadow">
+        <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-ink/90 px-4 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur">
           Updating scores…
         </div>
       )}
 
       {(hovered || error) && (
-        <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-white/95 px-3 py-2 text-sm shadow dark:bg-zinc-900/95">
+        <div className="pointer-events-none absolute bottom-10 left-4 rounded-2xl border border-line bg-surface/95 px-4 py-3 text-sm shadow-lg backdrop-blur">
           {error ? (
             <span className="text-red-600">{error}</span>
           ) : hovered ? (
             <>
-              <span className="font-semibold">{hovered.name ?? "Unnamed"}</span> <span className="text-zinc-500">{hovered.zcta}</span>
-              <div>
+              <span className="font-serif text-lg">{hovered.name ?? "Unnamed"}</span> <span className="text-muted">{hovered.zcta}</span>
+              <div className="text-muted">
                 {scores
                   ? hoveredScore === undefined
                     ? "Filtered out"
@@ -255,31 +267,32 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
         </div>
       )}
 
-      <div className="absolute bottom-8 right-3 max-w-[calc(100%-1.5rem)] rounded-lg bg-white/95 p-2 text-xs shadow-md md:p-3 dark:bg-zinc-900/95">
+      {/* Legend: top-right. Bottom-left has the hover card and credits; bottom-right is the chat's. */}
+      <div className="absolute right-4 top-4 max-w-[calc(100%-5rem)] rounded-2xl border border-line bg-surface/95 p-3 text-xs shadow-lg backdrop-blur md:p-4">
         <button
           type="button"
           onClick={() => setLegendOpen((o) => !o)}
-          className="font-semibold md:pointer-events-none"
+          className="text-[0.75rem] font-semibold uppercase tracking-[0.12em] text-muted md:pointer-events-none"
           aria-expanded={legendOpen}
         >
           {scores ? "Your score" : "Typical monthly rent"}
-          <span className="ml-1 text-zinc-500 md:hidden">{legendOpen ? "▾" : "▸"}</span>
+          <span className="ml-1 md:hidden">{legendOpen ? "▾" : "▸"}</span>
         </button>
         {/* On phones the list shows only when opened; from md (768 px) up it always shows. */}
-        <div className={legendOpen ? "mt-1 block" : "hidden md:mt-1 md:block"}>
-        <ul>
+        <div className={legendOpen ? "mt-2 block" : "hidden md:mt-2 md:block"}>
+        <ul className="space-y-1">
           {legend.map((row) => (
             <li key={row.label} className="flex items-center gap-2">
-              <span className="inline-block h-3 w-4 rounded-sm" style={{ background: row.color }} />
+              <span className="inline-block h-3 w-3 rounded-full" style={{ background: row.color }} />
               {row.label}
             </li>
           ))}
           <li className="flex items-center gap-2">
-            <span className="inline-block h-3 w-4 rounded-sm" style={{ background: scores ? FILTERED_COLOR : NO_DATA_COLOR }} />
+            <span className="inline-block h-3 w-3 rounded-full" style={{ background: scores ? FILTERED_COLOR : NO_DATA_COLOR }} />
             {scores ? "Filtered out" : "No data"}
           </li>
         </ul>
-        <div className="mt-1 text-zinc-500">
+        <div className="mt-2 text-[0.75rem] text-muted">
           {scores ? (
             "Click an area to see why"
           ) : (
