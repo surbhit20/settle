@@ -1,18 +1,18 @@
-# Settle: where should I live?
+# Settle: find your ideal home
 
 Settle answers one question for someone moving to the San Francisco Bay Area: **given my salary, my office, and what I care about, which neighborhoods should I live in?**
 
-You enter a salary, an office address, a maximum commute, the home size you want (a room in a shared home, a studio, or 1-4 bedrooms) and your priorities. Settle ranks the 208 ZIP code areas in San Francisco, San Mateo, Santa Clara, Alameda and Contra Costa counties, colors them on a map, and explains every score with numbers linked to their sources. A chat box handles "what if" questions and updates the map live.
+You enter a salary, an office address, whether you drive or take public transit, a maximum commute, the home size you want (a room in a shared home, a studio, or 1-4 bedrooms) and your priorities. Settle ranks the 208 ZIP code areas in San Francisco, San Mateo, Santa Clara, Alameda and Contra Costa counties, colors them on a map, and explains every score with numbers linked to their sources. You can put two or three areas side by side, with the better value in each row highlighted. A chat box handles "what if" questions, knows which areas you're looking at, and updates the map live.
 
-![Results: heat map, top 5 and chat](docs/screenshots/2-results-heat-map.jpg)
+![Results: heat map and top 5](docs/screenshots/2-results-heat-map.jpg)
 
-| Score breakdown | Hidden risks and city crime | Chat |
+| Score breakdown | Open or compare | Side-by-side comparison |
 |---|---|---|
-| ![Score card](docs/screenshots/3-area-card-score.jpg) | ![Risks](docs/screenshots/4-area-card-risks-fbi.jpg) | ![Chat](docs/screenshots/5-chat.jpg) |
+| ![Score card](docs/screenshots/3-area-card-score.jpg) | ![Open or add to compare](docs/screenshots/4-open-or-compare.jpg) | ![Compare](docs/screenshots/5-compare.jpg) |
 
-| Start (rent map) | Phone | Data sources page |
-|---|---|---|
-| ![Start](docs/screenshots/1-start-rent-map.jpg) | ![Phone](docs/screenshots/6-phone-results.jpg) | ![Sources](docs/screenshots/7-sources.jpg) |
+| Chat | Start (rent map, drive or transit) | Phone | Data sources page |
+|---|---|---|---|
+| ![Chat](docs/screenshots/6-chat.jpg) | ![Start](docs/screenshots/1-start-rent-map.jpg) | ![Phone](docs/screenshots/7-phone-results.jpg) | ![Sources](docs/screenshots/8-sources.jpg) |
 
 ## How it works
 
@@ -115,4 +115,4 @@ Tests never call paid APIs; network clients are injected or faked.
 
 ## Status
 
-v1 milestones M0–M5 are complete; M6 (polish) is in progress. Not deployed yet. v2 ideas (two offices, transit, listings, side-by-side comparison, schools and air quality) are in `CLAUDE.md`.
+v1 milestones M0–M5 are complete; M6 (polish) is in progress. Not deployed yet. From v2, public-transit commutes and side-by-side comparison are done; the rest (two offices, listings, schools and air quality) is in `CLAUDE.md`.

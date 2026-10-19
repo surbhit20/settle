@@ -70,7 +70,7 @@ export default function CompareView({ zctas, result, homeType, onRemove, onOpen,
           Close comparison
         </button>
       </div>
-      <p className="-mt-2 mb-4 text-xs text-muted">
+      <p className="-mt-2 text-xs text-muted">
         The better value in each row is highlighted. Click another area on the map to add it.
       </p>
 
@@ -79,11 +79,10 @@ export default function CompareView({ zctas, result, homeType, onRemove, onOpen,
 
       {loaded && (
         <div className="grid" style={gridStyle}>
-          {/* Header row, sticky so area names stay visible while scrolling. The upward shadow in
-              the page color covers the sidebar's top padding, so rows don't peek out above it. */}
+          {/* Header row, sticky so area names stay visible while scrolling (see STICKY). */}
           <div className={`${STICKY} -mx-px`} />
           {cols.map((c) => (
-            <div key={c.details.zcta} className={`${STICKY} px-2 pb-3 pt-1`}>
+            <div key={c.details.zcta} className={`${STICKY} px-2 pb-3`}>
               <div className="flex items-start justify-between gap-1">
                 <button type="button" onClick={() => onOpen(c.details.zcta)} className="min-w-0 text-left" title="Open the full card">
                   <span className="block truncate font-serif text-xl leading-tight hover:underline">{c.details.name ?? "Area"}</span>
@@ -131,7 +130,9 @@ export default function CompareView({ zctas, result, homeType, onRemove, onOpen,
   );
 }
 
-const STICKY = "sticky top-0 z-10 border-b border-line bg-paper shadow-[0_-1.5rem_0_0_var(--paper)]";
+// Pinned 1.5rem above the scroll area's top (-top-6) with matching extra padding (pt-7), so the
+// header covers the sidebar's top padding while scrolling and rows never peek out above it.
+const STICKY = "sticky -top-6 z-10 border-b border-line bg-paper pt-7";
 
 function ValueCell({ cell, best }: { cell: Cell; best: boolean }) {
   return (
