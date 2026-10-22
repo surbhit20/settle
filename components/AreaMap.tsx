@@ -268,31 +268,31 @@ export default function AreaMap({ scores, selectedZcta, compared = [], busy = fa
       )}
 
       {/* Legend: top-right. Bottom-left has the hover card and credits; bottom-right is the chat's. */}
-      <div className="absolute right-4 top-4 max-w-[calc(100%-5rem)] rounded-2xl border border-line bg-surface/95 p-3 text-xs shadow-lg backdrop-blur md:p-4">
+      <div className="absolute right-4 top-4 max-w-[calc(100%-5rem)] rounded-xl border border-line bg-surface/95 px-2.5 py-2 text-[0.7rem] shadow-lg backdrop-blur md:px-3 md:py-2.5">
         <button
           type="button"
           onClick={() => setLegendOpen((o) => !o)}
-          className="text-[0.75rem] font-semibold uppercase tracking-[0.12em] text-muted md:pointer-events-none"
+          className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-muted md:pointer-events-none"
           aria-expanded={legendOpen}
         >
           {scores ? "Your score" : "Typical monthly rent"}
           <span className="ml-1 md:hidden">{legendOpen ? "▾" : "▸"}</span>
         </button>
         {/* On phones the list shows only when opened; from md (768 px) up it always shows. */}
-        <div className={legendOpen ? "mt-2 block" : "hidden md:mt-2 md:block"}>
-        <ul className="space-y-1">
+        <div className={legendOpen ? "mt-1.5 block" : "hidden md:mt-1.5 md:block"}>
+        <ul className="space-y-0.5">
           {legend.map((row) => (
             <li key={row.label} className="flex items-center gap-2">
-              <span className="inline-block h-3 w-3 rounded-full" style={{ background: row.color }} />
+              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: row.color }} />
               {row.label}
             </li>
           ))}
           <li className="flex items-center gap-2">
-            <span className="inline-block h-3 w-3 rounded-full" style={{ background: scores ? FILTERED_COLOR : NO_DATA_COLOR }} />
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: scores ? FILTERED_COLOR : NO_DATA_COLOR }} />
             {scores ? "Filtered out" : "No data"}
           </li>
         </ul>
-        <div className="mt-2 text-[0.75rem] text-muted">
+        <div className="mt-1.5 text-[0.65rem] text-muted">
           {scores ? (
             "Click an area to see why"
           ) : (

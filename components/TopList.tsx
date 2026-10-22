@@ -1,22 +1,53 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { ScoredArea } from "@/lib/scoring/types";
 import { scoreColor } from "@/lib/scoreScale";
 
-type Props = { ranked: ScoredArea[]; filteredCount: number; onSelect: (zcta: string) => void };
+type Props = {
+  ranked: ScoredArea[];
+  filteredCount: number;
+  onSelect: (zcta: string) => void;
+  // Changes after each search: scroll this list into view and briefly highlight it.
+  revealKey?: number;
+};
 
-export default function TopList({ ranked, filteredCount, onSelect }: Props) {
+export default function TopList({ ranked, filteredCount, onSelect, revealKey = 0 }: Props) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLOListElement>(null);
+
+  // After a search, scroll to the results and flash a green ring around the list.
+  // Users who prefer reduced motion get an instant jump and no flash.
+  useEffect(() => {
+    if (revealKey === 0 || !wrapRef.current) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    wrapRef.current.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    if (!reduce) {
+      listRef.current?.animate(
+        [
+          { boxShadow: "0 0 0 0 transparent" },
+          { boxShadow: "0 0 0 4px var(--accent)", offset: 0.3 },
+          { boxShadow: "0 0 0 0 transparent" },
+        ],
+        { duration: 1600, delay: 300, easing: "ease-out" },
+      );
+    }
+  }, [revealKey]);
+
   if (ranked.length === 0) {
     return (
-      <p className="rounded-2xl bg-sunken px-4 py-3 text-sm leading-relaxed text-muted">
-        No areas match. All {filteredCount} were filtered out. Try a longer max commute or a higher budget.
-      </p>
+      <div ref={wrapRef} className="scroll-mt-4">
+        <p className="rounded-2xl bg-sunken px-4 py-3 text-sm leading-relaxed text-muted">
+          No areas match. All {filteredCount} were filtered out. Try a longer max commute or a higher budget.
+        </p>
+      </div>
     );
   }
   return (
-    <div>
+    // scroll-mt-4: leave a little space above the heading when scrolled to.
+    <div ref={wrapRef} className="scroll-mt-4">
       <h2 className="mb-3 font-serif text-2xl">Top 5 for you</h2>
-      <ol className="overflow-hidden rounded-2xl border border-line bg-surface">
+      <ol ref={listRef} className="overflow-hidden rounded-2xl border border-line bg-surface">
         {ranked.slice(0, 5).map((a) => (
           <li key={a.zcta} className="border-b border-line last:border-b-0">
             <button

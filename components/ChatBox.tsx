@@ -10,7 +10,7 @@ type Props = {
   request: ScoreRequest; // the user's current inputs, sent with every message
   onReply: (reply: ChatReply) => void; // Explorer applies the actions (rescore, select areas)
   view: ViewState; // what's on screen (open area, compared areas), sent so "it" and "this" make sense
-  viewLabel: string | null; // e.g. "Los Altos 94022", shown above the input
+  viewLabel: string | null; // e.g. "Los Altos 94022", shown on the minimized banner
 };
 
 const EXAMPLES = ["What if my budget goes up 300?", "I care more about safety", "Why is Milpitas ranked low?"];
@@ -144,11 +144,6 @@ export default function ChatBox({ request, onReply, view, viewLabel }: Props) {
       </div>
 
       <div className="border-t border-line px-4 pb-4 pt-3">
-        {viewLabel && (
-          <p className="mb-2 px-1 text-xs text-muted">
-            Asking about <span className="font-medium text-ink">{viewLabel}</span>: say &ldquo;it&rdquo; or &ldquo;this area&rdquo;.
-          </p>
-        )}
         <form
           onSubmit={handleSubmit}
           className="flex items-center gap-2 rounded-full border border-line bg-surface p-1.5 pl-4 transition focus-within:border-accent"

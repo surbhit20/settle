@@ -91,7 +91,7 @@ Shared helpers:
 
 ### 3b. Submitting the form (the main M3 path)
 1. `components/PriorityPicker.tsx`: six pair cards (`lib/priorities.ts → PAIR_CARDS`, every pair of the four priorities), dealt by `shuffledDeck()` in a random order with random left/right sides once the page runs in the browser (D049); "Redo the questions" deals a new deck → `prioritiesFromAnswers()` sets the sliders, or "Skip" sets `SCORING.defaultPriorities` (D027). The submit button is hidden while the cards show (`onAnsweringChange` → `SearchForm.answeringCards`); it appears once they're answered or skipped, and hides again on "Redo the questions".
-2. `SearchForm` submit → `Explorer.runScore(req)` → `POST /api/score` with `{ salaryUsd, officeAddress, maxCommuteMin, rentBudgetUsd | null, priorities }`.
+2. `SearchForm` submit → `Explorer.submitSearch(req)` → `Explorer.runScore(req)` (on success `revealKey` is bumped and `TopList` scrolls itself into view with a brief green ring; slider and chat rescoring don't scroll) → `POST /api/score` with `{ salaryUsd, officeAddress, maxCommuteMin, rentBudgetUsd | null, priorities }`.
 3. `app/api/score/route.ts`:
    1. `await connection()`; `lib/scoring/request.ts → parseScoreRequest()` validates the body (else 400).
    2. `lib/geocode.ts → geocodeOffice()`: `SELECT … FROM geocode_cache WHERE address_key = $1`; on a miss, `mireyeGeocoder` → **Mireye `POST /v1/geocode` (1 credit)** → `parseGeocodeResponse()` (accepts `rooftop` / `range_interpolation`; maps `address_too_coarse` / `address_not_found`) → `INSERT INTO geocode_cache`. A refusal → 422 with a message for the form (D025).

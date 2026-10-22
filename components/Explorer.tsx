@@ -9,13 +9,10 @@ import ScoreBreakdown from "@/components/ScoreBreakdown";
 import SearchForm from "@/components/SearchForm";
 import TopList from "@/components/TopList";
 import type { ChatReply } from "@/lib/agent/types";
-import { HOME_TYPES } from "@/lib/scoring/config";
 import type { ScoreRequest, ScoreResponse } from "@/lib/scoring/request";
 import type { Priorities } from "@/lib/scoring/types";
 
 const MAX_COMPARE = 3; // columns in the comparison
-
-const usd = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 
 // Owns the page state: the last request, the scoring result, and which area is selected.
 // The form, map, list and card all read from here.
@@ -32,11 +29,13 @@ export default function Explorer() {
   // When the chat changes inputs, the form is refilled by remounting it with these values.
   const [formSeed, setFormSeed] = useState<ScoreRequest | null>(null);
   const [formVersion, setFormVersion] = useState(0);
+  const [revealKey, setRevealKey] = useState(0); // bumped after each search; TopList scrolls into view
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0); // ignore responses to requests that have been superseded
 
 
-  async function runScore(req: ScoreRequest) {
+  // Returns true when new results arrived (false on error or when a newer request replaced it).
+  async function runScore(req: ScoreRequest): Promise<boolean> {
     const id = ++requestIdRef.current;
     setLoading(true);
     setError(null);
@@ -47,18 +46,27 @@ export default function Explorer() {
         body: JSON.stringify(req),
       });
       const body = await res.json();
-      if (id !== requestIdRef.current) return; // a newer request is in flight
+      if (id !== requestIdRef.current) return false; // a newer request is in flight
       if (!res.ok) {
         setError(body.error ?? `Something went wrong (HTTP ${res.status}).`);
-        return;
+        return false;
       }
       setResult(body as ScoreResponse);
       setLastRequest(req);
+      return true;
     } catch {
       if (id === requestIdRef.current) setError("Could not reach the server.");
+      return false;
     } finally {
       if (id === requestIdRef.current) setLoading(false);
     }
+  }
+
+  // The search button: score, then bring the top 5 into view. Each successful search bumps
+  // `revealKey`, which TopList watches to scroll itself into view and flash a highlight.
+  // (Slider and chat rescoring don't scroll, so the view doesn't jump while adjusting.)
+  async function submitSearch(req: ScoreRequest) {
+    if (await runScore(req)) setRevealKey((k) => k + 1);
   }
 
   // Sliders moved after a result: rescore with the same inputs, at most every 300 ms.
@@ -190,22 +198,14 @@ export default function Explorer() {
           <SearchForm
             key={formVersion}
             initial={formSeed}
-            onSubmit={runScore}
+            onSubmit={submitSearch}
             onPrioritiesChange={handlePrioritiesChange}
             loading={loading}
             hasResult={result !== null}
-            unavailable={result?.unavailableEverywhere ?? ["safety"]}
           />
           {error && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p>}
           {result && (
-            <>
-              <TopList ranked={result.ranked} filteredCount={result.filtered.length} onSelect={openArea} />
-              <p className="text-xs leading-relaxed text-muted">
-                Office: {result.office.address}. Commute: {lastRequest?.commuteMode === "transit" ? "public transit" : "drive"}. Home
-                size: {HOME_TYPES[result.homeType].label}. Budget {usd(result.budgetUsd)}/mo
-                {result.budgetDerived ? " (30% of gross pay)" : ""}; areas more than 15% over it are filtered out.
-              </p>
-            </>
+            <TopList ranked={result.ranked} filteredCount={result.filtered.length} onSelect={openArea} revealKey={revealKey} />
           )}
         </div>
       </aside>

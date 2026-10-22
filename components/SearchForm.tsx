@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import PriorityPicker from "@/components/PriorityPicker";
 import { HOME_TYPES, SCORING } from "@/lib/scoring/config";
 import type { ScoreRequest } from "@/lib/scoring/request";
-import type { CommuteMode, HomeType, Priorities, SubScoreKey } from "@/lib/scoring/types";
+import type { CommuteMode, HomeType, Priorities } from "@/lib/scoring/types";
 
 type Props = {
   onSubmit: (req: ScoreRequest) => void;
@@ -12,14 +12,13 @@ type Props = {
   onPrioritiesChange: (p: Priorities) => void;
   loading: boolean;
   hasResult: boolean;
-  unavailable: SubScoreKey[];
   // Starting values, e.g. after the chat changed a filter. The parent remounts this form
   // (with a new `key`) whenever they change, so they only need to be read once.
   initial?: ScoreRequest | null;
 };
 
 // Inputs are kept as strings while typing (an empty box is "", not 0) and converted on submit.
-export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasResult, unavailable, initial }: Props) {
+export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasResult, initial }: Props) {
   const [salary, setSalary] = useState(initial ? initial.salaryUsd.toLocaleString("en-US") : "");
   const [office, setOffice] = useState(initial?.officeAddress ?? "");
   const [maxCommute, setMaxCommute] = useState(String(initial?.maxCommuteMin ?? 45));
@@ -60,11 +59,11 @@ export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasR
       </h2>
       <label className="block">
         <span className={labelText}>Annual salary (before tax)</span>
-        <input className={input} inputMode="numeric" placeholder="e.g. 150,000" value={salary} onChange={(e) => setSalary(e.target.value)} required />
+        <input className={input} inputMode="numeric" value={salary} onChange={(e) => setSalary(e.target.value)} required />
       </label>
       <label className="block">
         <span className={labelText}>Office street address</span>
-        <input className={input} placeholder="e.g. 1 Market St, San Francisco, CA" value={office} onChange={(e) => setOffice(e.target.value)} required />
+        <input className={input} value={office} onChange={(e) => setOffice(e.target.value)} required />
       </label>
       {/* Two buttons that behave like a radio choice (role="radiogroup" for screen readers). */}
       <div>
@@ -112,27 +111,18 @@ export default function SearchForm({ onSubmit, onPrioritiesChange, loading, hasR
           ))}
         </select>
       </label>
-      <p className="-mt-1 text-xs leading-relaxed text-muted">
-        {commuteMode === "drive"
-          ? "Commute is drive time without traffic."
-          : "Transit times are typical weekday mornings, from each area's center to your office's area."}{" "}
-        Leave the budget empty to use 30% of your gross monthly pay.
-      </p>
-
       <div className="mt-1 border-t border-line pt-5">
         <PriorityPicker
           priorities={priorities}
           onChange={handlePriorities}
-          unavailable={unavailable}
           startWithSliders={!!initial}
           onAnsweringChange={setAnsweringCards}
           commuteMode={commuteMode}
         />
       </div>
 
-      {answeringCards ? (
-        <p className="text-center text-xs text-muted">Answer the questions above, or skip them, to see your results.</p>
-      ) : (
+      {/* The button appears only once the questions are answered or skipped. */}
+      {!answeringCards && (
         <button
           type="submit"
           disabled={loading}

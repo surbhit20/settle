@@ -15,8 +15,6 @@ const LABELS: Record<SubScoreKey, string> = {
 type Props = {
   priorities: Priorities;
   onChange: (p: Priorities) => void;
-  // Shown under the Safety slider while crime data isn't loaded yet.
-  unavailable?: SubScoreKey[];
   // Skip the pair cards (e.g. the form was refilled after a chat change).
   startWithSliders?: boolean;
   // Tells the form whether the pair cards are showing, so it can hide its submit button.
@@ -38,7 +36,6 @@ function useIsClient() {
 export default function PriorityPicker({
   priorities,
   onChange,
-  unavailable = [],
   startWithSliders = false,
   onAnsweringChange,
   commuteMode = "drive",
@@ -139,9 +136,6 @@ export default function PriorityPicker({
           <span className="w-5 text-right tabular-nums text-muted">{priorities[k]}</span>
         </label>
       ))}
-      {unavailable.includes("safety") && (
-        <p className="text-xs text-muted">Safety isn&apos;t scored yet: crime data arrives in a later update.</p>
-      )}
     </div>
   );
 }
